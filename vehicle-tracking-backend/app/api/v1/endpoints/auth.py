@@ -10,6 +10,7 @@ from app.exceptions.custom_exceptions import InvalidCredentialsException
 router = APIRouter()
 
 @router.post("/login", response_model=Token)
+@router.post("/login/", response_model=Token, include_in_schema=False)
 async def login(
     request: Request,
     db: Session = Depends(get_db)

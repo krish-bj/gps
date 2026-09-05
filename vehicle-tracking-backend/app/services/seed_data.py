@@ -3773,6 +3773,32 @@ def init_db_seed(db: Session, force: bool = False):
         )
         db.add(assign_b)
 
+    user_b_elicius = db.query(User).filter(User.email == "userb@eliciusenergy.com").first()
+    if not user_b_elicius:
+        user_b_elicius = User(
+            email="userb@eliciusenergy.com",
+            full_name="User B [Elicius Energy]",
+            password_hash=get_password_hash("user123"),
+            role="user",
+            assigned_route_id=route_a.id,
+            assigned_vehicle_id=vehicle_1.id
+        )
+        db.add(user_b_elicius)
+        db.flush()
+
+    assign_b_elicius = db.query(UserAssignment).filter(
+        UserAssignment.user_id == user_b_elicius.id,
+        UserAssignment.is_active == True
+    ).first()
+    if not assign_b_elicius:
+        assign_b_elicius = UserAssignment(
+            user_id=user_b_elicius.id,
+            route_id=route_a.id,
+            vehicle_id=vehicle_1.id,
+            is_active=True
+        )
+        db.add(assign_b_elicius)
+
     # 4. Seed Initial Telemetry Records
     if db.query(GPSTelemetry).filter(GPSTelemetry.vehicle_id == vehicle_1.id).count() == 0:
         telemetry_1 = GPSTelemetry(

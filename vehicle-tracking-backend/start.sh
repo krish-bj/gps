@@ -6,8 +6,16 @@ echo "Starting FastAPI Uvicorn server on port ${PORT:-8000}..."
 uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000} &
 UVICORN_PID=$!
 
-# Wait briefly for FastAPI server to initialize
+# Wait for FastAPI server startup and DB initialization
+echo "Waiting for API server startup and database seeding..."
 sleep 3
+for i in $(seq 1 15); do
+  if curl -s http://127.0.0.1:${PORT:-8000}/health | grep -q "healthy"; then
+    echo "API server is ready and healthy."
+    break
+  fi
+  sleep 2
+done
 
 # Start GPS Simulator targeting local REST API
 if [ "${ENABLE_SIMULATOR:-true}" = "true" ]; then
