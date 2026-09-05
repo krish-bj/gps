@@ -1,0 +1,26 @@
+# Render Infrastructure-as-Code Blueprint
+# For Python FastAPI Vehicle Tracking Backend
+
+services:
+  # -------------------------------------------------------------
+  # FastAPI Backend API Service
+  # -------------------------------------------------------------
+  - type: web
+    name: vehicle-tracking-backend
+    env: docker
+    rootDir: vehicle-tracking-backend
+    dockerfilePath: Dockerfile
+    healthCheckPath: /health
+    plan: free
+    region: singapore # Options: oregon, frankfurt, singapore, ohio
+    envVars:
+      - key: APP_ENV
+        value: production
+      - key: SECRET_KEY
+        generateValue: true
+      - key: ALLOWED_ORIGINS
+        value: "*"
+      - key: ALLOWED_HOSTS
+        value: "*"
+      - key: PROJECT_NAME
+        value: "Elicius Energy Vehicle Tracking System"
