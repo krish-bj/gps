@@ -59,6 +59,15 @@ class Settings(BaseSettings):
         default="change_this_to_a_secure_32_character_random_key_for_dev",
         description="Secret key for JWT encoding and decoding"
     )
+
+    @field_validator("JWT_SECRET_KEY", mode="before")
+    @classmethod
+    def assemble_jwt_secret_key(cls, v: Any) -> Any:
+        if not v or "change_this" in str(v):
+            secret = os.getenv("SECRET_KEY")
+            if secret and len(secret) >= 32:
+                return secret
+        return v
     JWT_ALGORITHM: str = Field(default="HS256", description="JWT Signing Algorithm")
     ACCESS_TOKEN_EXPIRE_MINUTES: int = Field(default=10080, description="Token Expiration in Minutes (default 7 days)")
 
