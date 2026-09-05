@@ -1,5 +1,5 @@
 import os
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Union
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -77,12 +77,12 @@ class Settings(BaseSettings):
 
 
     # CORS & Security Hardening Configuration
-    ALLOWED_ORIGINS: list[str] = Field(
-        default=["http://localhost:3000", "http://localhost:8000", "http://127.0.0.1:3000", "http://localhost:8080", "*"],
+    ALLOWED_ORIGINS: Union[list[str], str] = Field(
+        default=["http://localhost:3000", "http://localhost:8000", "http://127.0.0.1:3000", "http://localhost:8080", "https://gps-9ei6.onrender.com", "*"],
         description="Allowed CORS Origins"
     )
-    ALLOWED_HOSTS: list[str] = Field(
-        default=["localhost", "127.0.0.1", "0.0.0.0", "*"],
+    ALLOWED_HOSTS: Union[list[str], str] = Field(
+        default=["localhost", "127.0.0.1", "0.0.0.0", "gps-9ei6.onrender.com", "*"],
         description="Allowed HTTP Host Headers"
     )
 

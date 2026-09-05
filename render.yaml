@@ -38,3 +38,5 @@ services:
         value: '["*"]'
       - key: PROJECT_NAME
         value: "Elicius Energy Vehicle Tracking System"
+      - key: ENABLE_SIMULATOR
+        value: "true"
