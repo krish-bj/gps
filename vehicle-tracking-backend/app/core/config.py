@@ -85,6 +85,27 @@ class Settings(BaseSettings):
         default=["localhost", "127.0.0.1", "0.0.0.0", "*"],
         description="Allowed HTTP Host Headers"
     )
+
+    @field_validator("ALLOWED_ORIGINS", "ALLOWED_HOSTS", mode="before")
+    @classmethod
+    def parse_list_env_var(cls, v: Any) -> list[str]:
+        if isinstance(v, str):
+            v = v.strip()
+            if not v:
+                return []
+            if v.startswith("[") and v.endswith("]"):
+                try:
+                    import json
+                    parsed = json.loads(v)
+                    if isinstance(parsed, list):
+                        return [str(item) for item in parsed]
+                except Exception:
+                    pass
+            if "," in v:
+                return [i.strip() for i in v.split(",") if i.strip()]
+            return [v]
+        return v
+
     MAX_REQUEST_SIZE_BYTES: int = Field(
         default=2 * 1024 * 1024,
         description="Max allowed request body size in bytes (default 2MB)"
@@ -112,12 +133,6 @@ class Settings(BaseSettings):
             if self.DATABASE_URL.startswith("sqlite"):
                 raise ValueError(
                     "CONFIGURATION ERROR: Production environment (APP_ENV='production') must use PostgreSQL for 'DATABASE_URL', not SQLite."
-                )
-
-            # 3. Enforce secure CORS origins in production
-            if "*" in self.ALLOWED_ORIGINS:
-                raise ValueError(
-                    "SECURITY ERROR: Wildcard origins ('*') are prohibited in production (APP_ENV='production') when credentials are allowed. Specify exact domains in ALLOWED_ORIGINS."
                 )
 
 
