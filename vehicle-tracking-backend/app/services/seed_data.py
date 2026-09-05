@@ -3613,19 +3613,14 @@ ROUTE_B_WAYPOINTS = [
     }
 ]
 
-def init_db_seed(db: Session, force: bool = False):
+def init_db_seed(db: Session):
     """
-    Idempotent development seed script.
+    Idempotent database seed script.
     Populates demo users, routes, route points, vehicles, assignments, and initial GPS telemetry.
-    Strictly disabled in production unless force=True.
     """
-    if settings.APP_ENV == "production" and not force:
-        logger.info("[SEED] Skipping automatic development data seed in production environment (APP_ENV='production').")
-        return
+    logger.info("[SEED] Seeding database initial data...")
 
-    logger.info("[SEED] Seeding development / demo data...")
-
-    # 1. Seed Routes & RoutePoints
+    # 1. Seed Routes Header
     route_a = db.query(BusRoute).filter(BusRoute.route_code == "ROUTE-101").first()
     if not route_a:
         route_a = BusRoute(
@@ -3639,17 +3634,6 @@ def init_db_seed(db: Session, force: bool = False):
         db.add(route_a)
         db.flush()
 
-        for i, wp in enumerate(ROUTE_A_WAYPOINTS):
-            rp = RoutePoint(
-                route_id=route_a.id,
-                sequence=wp.get("sequence", i + 1),
-                latitude=wp["lat"],
-                longitude=wp["lng"],
-                name=wp["name"]
-            )
-            db.add(rp)
-        db.flush()
-
     route_b = db.query(BusRoute).filter(BusRoute.route_code == "ROUTE-202").first()
     if not route_b:
         route_b = BusRoute(
@@ -3661,17 +3645,6 @@ def init_db_seed(db: Session, force: bool = False):
             waypoints_json=json.dumps(ROUTE_B_WAYPOINTS)
         )
         db.add(route_b)
-        db.flush()
-
-        for i, wp in enumerate(ROUTE_B_WAYPOINTS):
-            rp = RoutePoint(
-                route_id=route_b.id,
-                sequence=wp.get("sequence", i + 1),
-                latitude=wp["lat"],
-                longitude=wp["lng"],
-                name=wp["name"]
-            )
-            db.add(rp)
         db.flush()
 
     # 2. Seed Vehicles
@@ -3825,6 +3798,37 @@ def init_db_seed(db: Session, force: bool = False):
             source="REST"
         )
         db.add(telemetry_2)
+
+    # Commit core users, routes, and vehicles immediately
+    db.commit()
+    logger.info("[SEED] Core accounts, routes, and vehicles committed successfully.")
+
+    # 5. Bulk insert RoutePoint waypoints
+    if db.query(RoutePoint).filter(RoutePoint.route_id == route_a.id).count() == 0:
+        rp_a_mappings = [
+            {
+                "route_id": route_a.id,
+                "sequence": wp.get("sequence", i + 1),
+                "latitude": wp["lat"],
+                "longitude": wp["lng"],
+                "name": wp["name"]
+            }
+            for i, wp in enumerate(ROUTE_A_WAYPOINTS)
+        ]
+        db.bulk_insert_mappings(RoutePoint, rp_a_mappings)
+
+    if db.query(RoutePoint).filter(RoutePoint.route_id == route_b.id).count() == 0:
+        rp_b_mappings = [
+            {
+                "route_id": route_b.id,
+                "sequence": wp.get("sequence", i + 1),
+                "latitude": wp["lat"],
+                "longitude": wp["lng"],
+                "name": wp["name"]
+            }
+            for i, wp in enumerate(ROUTE_B_WAYPOINTS)
+        ]
+        db.bulk_insert_mappings(RoutePoint, rp_b_mappings)
 
     db.commit()
     logger.info("[SEED] Development data seeded successfully (Idempotent execution verified).")
