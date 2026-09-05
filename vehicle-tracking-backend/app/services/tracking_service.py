@@ -11,8 +11,11 @@ from app.exceptions.custom_exceptions import EntityNotFoundException, ForbiddenA
 from app.utils.helpers import parse_json_waypoints
 from app.schemas.schemas import (
     UserResponse, BusRouteResponse, VehicleResponse,
-    GPSTelemetryResponse, UserAssignedRouteResponse, Waypoint
+    GPSTelemetryResponse, UserAssignedRouteResponse, Waypoint,
+    TrackingSummaryResponse, TrackingSummaryStatus, CurrentLocationResponse,
+    compute_vehicle_status
 )
+from app.schemas.route_point import RoutePointResponse
 
 from app.services.assignment_service import AssignmentService
 
@@ -25,7 +28,102 @@ class TrackingService:
         self.vehicle_repo = VehicleRepository(db)
         self.telemetry_repo = TelemetryRepository(db)
 
+    def get_my_current_location(self, user: User) -> CurrentLocationResponse:
+        details = self.assignment_service.get_user_assigned_details(user)
+        vehicle = details["vehicle"]
+
+        latest = self.telemetry_repo.get_latest_by_vehicle_id(vehicle.id)
+        if latest:
+            derived_status = compute_vehicle_status(latest.recorded_at)
+            return CurrentLocationResponse(
+                vehicle_code=vehicle.vehicle_code,
+                latitude=latest.latitude,
+                longitude=latest.longitude,
+                speed=latest.speed,
+                recorded_at=latest.recorded_at,
+                received_at=latest.received_at,
+                status=derived_status
+            )
+
+        if vehicle.last_latitude is not None and vehicle.last_longitude is not None:
+            derived_status = compute_vehicle_status(vehicle.last_timestamp)
+            return CurrentLocationResponse(
+                vehicle_code=vehicle.vehicle_code,
+                latitude=vehicle.last_latitude,
+                longitude=vehicle.last_longitude,
+                speed=vehicle.last_speed or 0.0,
+                recorded_at=vehicle.last_timestamp or vehicle.created_at,
+                received_at=vehicle.last_timestamp or vehicle.created_at,
+                status=derived_status
+            )
+
+        return CurrentLocationResponse(
+            vehicle_code=vehicle.vehicle_code,
+            latitude=None,
+            longitude=None,
+            speed=0.0,
+            recorded_at=None,
+            received_at=None,
+            status="NO_DATA"
+        )
+
+
+    def get_tracking_summary_for_user(self, user: User) -> TrackingSummaryResponse:
+        details = self.assignment_service.get_user_assigned_details(user)
+        route = details["route"]
+        vehicle = details["vehicle"]
+
+        waypoints_list = [Waypoint(**wp) for wp in parse_json_waypoints(route.waypoints_json)]
+        route_points_list = [RoutePointResponse.model_validate(rp) for rp in route.route_points] if hasattr(route, "route_points") and route.route_points else []
+
+        route_resp = BusRouteResponse(
+            id=route.id,
+            route_code=route.route_code,
+            route_name=route.route_name,
+            description=route.description,
+            start_location=route.start_location,
+            end_location=route.end_location,
+            waypoints=waypoints_list,
+            route_points=route_points_list,
+            created_at=route.created_at
+        )
+
+        vehicle_resp = VehicleResponse.model_validate(vehicle) if vehicle else None
+
+        latest_telemetry = self.telemetry_repo.get_latest_by_vehicle_id(vehicle.id) if vehicle else None
+        if latest_telemetry:
+            latest_resp = GPSTelemetryResponse.model_validate(latest_telemetry)
+        elif vehicle and vehicle.last_latitude is not None and vehicle.last_longitude is not None:
+            latest_resp = GPSTelemetryResponse(
+                id=0,
+                vehicle_id=vehicle.id,
+                latitude=vehicle.last_latitude,
+                longitude=vehicle.last_longitude,
+                speed_kmh=vehicle.last_speed or 0.0,
+                heading=0.0,
+                recorded_at=vehicle.last_timestamp or vehicle.created_at,
+                received_at=vehicle.last_timestamp or vehicle.created_at,
+                source="REST"
+            )
+        else:
+            latest_resp = None
+
+        derived_status = compute_vehicle_status(vehicle.last_timestamp) if vehicle else "NO_DATA"
+        status_resp = TrackingSummaryStatus(
+            vehicle_status=derived_status,
+            is_active_assignment=True,
+            last_updated=vehicle.last_timestamp or (vehicle.created_at if vehicle else None)
+        )
+
+        return TrackingSummaryResponse(
+            route=route_resp,
+            vehicle=vehicle_resp,
+            latest_location=latest_resp,
+            status=status_resp
+        )
+
     def get_assigned_route_for_user(self, user: User) -> UserAssignedRouteResponse:
+
         details = self.assignment_service.get_user_assigned_details(user)
         route = details["route"]
         vehicle = details["vehicle"]
@@ -77,7 +175,9 @@ class TrackingService:
                     longitude=vehicle.last_longitude,
                     speed_kmh=vehicle.last_speed or 0.0,
                     heading=0.0,
-                    timestamp=vehicle.last_timestamp or vehicle.created_at
+                    recorded_at=vehicle.last_timestamp or vehicle.created_at,
+                    received_at=vehicle.last_timestamp or vehicle.created_at,
+                    source="REST"
                 )
             raise EntityNotFoundException("GPSTelemetry", f"vehicle_{vehicle_id}")
 
@@ -92,7 +192,44 @@ class TrackingService:
         history = self.telemetry_repo.get_history_by_vehicle_id(vehicle_id, limit=limit)
         return [GPSTelemetryResponse.model_validate(log) for log in history]
 
-    def ingest_telemetry(self, latitude: float, longitude: float, speed_kmh: float, heading: float, vehicle_code: Optional[str] = None, vehicle_id: Optional[int] = None, timestamp: Optional[datetime] = None) -> GPSTelemetryResponse:
+    def get_my_vehicle_history(
+        self,
+        user: User,
+        from_time: Optional[datetime] = None,
+        to_time: Optional[datetime] = None,
+        limit: int = 100
+    ) -> List[GPSTelemetryResponse]:
+        details = self.assignment_service.get_user_assigned_details(user)
+        vehicle = details["vehicle"]
+
+        if from_time and to_time and from_time > to_time:
+            from fastapi import HTTPException, status
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="'from' timestamp must be before or equal to 'to' timestamp."
+            )
+
+        sane_limit = min(max(1, limit), 1000)
+        history = self.telemetry_repo.get_filtered_history(
+            vehicle_id=vehicle.id,
+            from_time=from_time,
+            to_time=to_time,
+            limit=sane_limit
+        )
+        return [GPSTelemetryResponse.model_validate(log) for log in history]
+
+
+    def ingest_telemetry(
+        self,
+        latitude: float,
+        longitude: float,
+        speed_kmh: float,
+        heading: float,
+        vehicle_code: Optional[str] = None,
+        vehicle_id: Optional[int] = None,
+        timestamp: Optional[datetime] = None,
+        source: str = "REST"
+    ) -> GPSTelemetryResponse:
         vehicle = None
         if vehicle_id:
             vehicle = self.vehicle_repo.get_by_id(vehicle_id)
@@ -103,22 +240,38 @@ class TrackingService:
             raise EntityNotFoundException("Vehicle", vehicle_code or vehicle_id or "unknown")
 
         log_ts = timestamp or datetime.now(timezone.utc)
-        telemetry = self.telemetry_repo.create(
-            vehicle_id=vehicle.id,
-            latitude=latitude,
-            longitude=longitude,
-            speed_kmh=speed_kmh,
-            heading=heading,
-            timestamp=log_ts
-        )
+        if log_ts.tzinfo is None:
+            log_ts = log_ts.replace(tzinfo=timezone.utc)
 
-        vehicle.last_latitude = latitude
-        vehicle.last_longitude = longitude
-        vehicle.last_speed = speed_kmh
-        vehicle.last_timestamp = log_ts
-        vehicle.status = "MOVING" if speed_kmh > 0 else "IDLE"
+        try:
+            telemetry = self.telemetry_repo.create(
+                vehicle_id=vehicle.id,
+                latitude=latitude,
+                longitude=longitude,
+                speed_kmh=speed_kmh,
+                heading=heading,
+                timestamp=log_ts,
+                source=source
+            )
 
-        self.db.commit()
-        self.db.refresh(telemetry)
+            # Handle out-of-order timestamps: Only update cached latest vehicle coordinates
+            # if incoming timestamp is newer than or equal to current last_timestamp.
+            is_newer_or_equal = True
+            if vehicle.last_timestamp is not None:
+                last_ts = vehicle.last_timestamp if vehicle.last_timestamp.tzinfo else vehicle.last_timestamp.replace(tzinfo=timezone.utc)
+                if log_ts < last_ts:
+                    is_newer_or_equal = False
 
-        return GPSTelemetryResponse.model_validate(telemetry)
+            if is_newer_or_equal:
+                vehicle.last_latitude = latitude
+                vehicle.last_longitude = longitude
+                vehicle.last_speed = speed_kmh
+                vehicle.last_timestamp = log_ts
+                vehicle.status = compute_vehicle_status(log_ts)
+
+            self.db.commit()
+            self.db.refresh(telemetry)
+            return GPSTelemetryResponse.model_validate(telemetry)
+        except Exception as e:
+            self.db.rollback()
+            raise e

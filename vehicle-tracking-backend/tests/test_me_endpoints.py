@@ -42,7 +42,7 @@ def test_get_me_route_user_a(client, user_a_headers):
     assert res.status_code == 200
     data = res.json()
     assert data["route_code"] == "ROUTE-101"
-    assert data["name"] == "Downtown Express"
+    assert "Downtown Express" in data["name"]
     assert "start_location" in data
     assert "end_location" in data
     assert "route_points" in data

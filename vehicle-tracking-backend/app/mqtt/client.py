@@ -6,95 +6,144 @@ import paho.mqtt.client as mqtt
 
 from app.core.config import settings
 from app.db.session import SessionLocal
-from app.repositories.vehicle_repository import VehicleRepository
-from app.repositories.telemetry_repository import TelemetryRepository
+from app.services.tracking_service import TrackingService
 
 logger = logging.getLogger("mqtt_client")
 
 class MQTTClient:
     def __init__(self):
-        self.client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id="fastapi_gps_backend")
-        self.client.on_connect = self.on_connect
-        self.client.on_message = self.on_message
+        self.client = None
         self._thread = None
+        self._is_running = False
+
+    def _init_client(self):
+        try:
+            if hasattr(mqtt, "CallbackAPIVersion"):
+                self.client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id="fastapi_gps_backend")
+            else:
+                self.client = mqtt.Client(client_id="fastapi_gps_backend")
+        except Exception:
+            self.client = mqtt.Client(client_id="fastapi_gps_backend")
+
+        if settings.MQTT_USERNAME and settings.MQTT_PASSWORD:
+            self.client.username_pw_set(settings.MQTT_USERNAME, settings.MQTT_PASSWORD)
+
+        self.client.on_connect = self.on_connect
+        self.client.on_disconnect = self.on_disconnect
+        self.client.on_message = self.on_message
 
     def on_connect(self, client, userdata, flags, rc, properties=None):
         if rc == 0:
-            logger.info("Connected to Mosquitto MQTT Broker!")
-            client.subscribe(settings.MQTT_TOPIC)
+            logger.info(f"Successfully connected to Mosquitto MQTT Broker ({settings.MQTT_HOST}:{settings.MQTT_PORT})")
+            client.subscribe(settings.MQTT_TOPIC_PREFIX)
+            client.subscribe("vehicles/+/gps")
+            client.subscribe("vehicles/+/telemetry")
+            logger.info(f"Subscribed to MQTT topics: '{settings.MQTT_TOPIC_PREFIX}', 'vehicles/+/gps'")
         else:
-            logger.warning(f"MQTT connect failed with rc {rc}")
+            logger.warning(f"MQTT broker connection failed with return code {rc}")
+
+    def on_disconnect(self, client, userdata, rc, properties=None):
+        if rc != 0:
+            logger.warning(f"Unexpected MQTT disconnection (rc={rc}). Automatic reconnect active.")
 
     def on_message(self, client, userdata, msg):
+        """
+        Handle incoming MQTT messages on topic: vehicles/{vehicle_code}/gps
+        Payload:
+        {
+          "latitude": 12.9716,
+          "longitude": 77.5946,
+          "speed": 35.4,
+          "timestamp": "2026-09-05T10:30:00Z"
+        }
+        Calls the SAME TrackingService.ingest_telemetry() used by REST API ingestion.
+        """
+        db = None
         try:
             payload_str = msg.payload.decode("utf-8")
             data = json.loads(payload_str)
             
+            # Extract vehicle_code from topic: vehicles/{vehicle_code}/gps
             topic_parts = msg.topic.split("/")
-            vehicle_code_topic = topic_parts[1] if len(topic_parts) >= 3 else None
+            vehicle_code_topic = topic_parts[1] if len(topic_parts) >= 2 else None
 
             vehicle_code = data.get("vehicle_code") or vehicle_code_topic
             vehicle_id = data.get("vehicle_id")
             latitude = data.get("latitude")
             longitude = data.get("longitude")
-            speed_kmh = data.get("speed_kmh", 0.0)
+            speed = data.get("speed", data.get("speed_kmh", 0.0))
             heading = data.get("heading", 0.0)
-            
+
             if latitude is None or longitude is None:
+                logger.warning(f"MQTT message ignored: missing latitude or longitude on topic '{msg.topic}'")
                 return
 
-            db = SessionLocal()
-            try:
-                v_repo = VehicleRepository(db)
-                t_repo = TelemetryRepository(db)
+            if not vehicle_code and not vehicle_id:
+                logger.warning(f"MQTT message ignored: missing vehicle_code or vehicle_id on topic '{msg.topic}'")
+                return
 
-                vehicle = None
-                if vehicle_id:
-                    vehicle = v_repo.get_by_id(vehicle_id)
-                elif vehicle_code:
-                    vehicle = v_repo.get_by_code(vehicle_code)
-
-                if vehicle:
+            timestamp_val = None
+            if data.get("timestamp"):
+                try:
+                    ts_str = str(data["timestamp"]).replace("Z", "+00:00")
+                    timestamp_val = datetime.fromisoformat(ts_str)
+                except Exception as parse_err:
+                    logger.warning(f"Failed to parse MQTT timestamp '{data.get('timestamp')}': {parse_err}")
                     timestamp_val = datetime.now(timezone.utc)
-                    if data.get("timestamp"):
-                        try:
-                            timestamp_val = datetime.fromisoformat(data["timestamp"].replace("Z", "+00:00"))
-                        except Exception:
-                            pass
 
-                    t_repo.create(
-                        vehicle_id=vehicle.id,
-                        latitude=float(latitude),
-                        longitude=float(longitude),
-                        speed_kmh=float(speed_kmh),
-                        heading=float(heading),
-                        timestamp=timestamp_val
-                    )
-
-                    vehicle.last_latitude = float(latitude)
-                    vehicle.last_longitude = float(longitude)
-                    vehicle.last_speed = float(speed_kmh)
-                    vehicle.last_timestamp = timestamp_val
-                    vehicle.status = "MOVING" if float(speed_kmh) > 0 else "IDLE"
-
-                    db.commit()
-            finally:
-                db.close()
+            # Delegate to the SAME TrackingService used by REST API ingestion
+            db = SessionLocal()
+            tracking_service = TrackingService(db)
+            tracking_service.ingest_telemetry(
+                latitude=float(latitude),
+                longitude=float(longitude),
+                speed_kmh=float(speed),
+                heading=float(heading),
+                vehicle_code=str(vehicle_code) if vehicle_code else None,
+                vehicle_id=int(vehicle_id) if vehicle_id else None,
+                timestamp=timestamp_val,
+                source="MQTT"
+            )
+            logger.debug(f"MQTT telemetry ingested for vehicle '{vehicle_code or vehicle_id}'")
         except Exception as e:
-            logger.error(f"MQTT message processing error: {e}")
+            logger.error(f"Error processing MQTT payload on '{msg.topic}': {e}", exc_info=False)
+        finally:
+            if db:
+                db.close()
 
     def start(self):
         if not settings.MQTT_ENABLED:
+            logger.info("MQTT Service is disabled via settings (MQTT_ENABLED=False).")
             return
+
+        if self._is_running:
+            return
+
+        self._init_client()
+        self._is_running = True
 
         def run_loop():
             try:
-                self.client.connect(settings.MQTT_BROKER_HOST, settings.MQTT_BROKER_PORT, keepalive=60)
+                logger.info(f"Connecting MQTT client to broker at {settings.MQTT_HOST}:{settings.MQTT_PORT}...")
+                self.client.connect(settings.MQTT_HOST, settings.MQTT_PORT, keepalive=60)
                 self.client.loop_forever()
             except Exception as e:
-                logger.warning(f"MQTT broker connection error ({e}). REST fallback active.")
+                logger.warning(f"MQTT broker unavailable ({e}). REST API ingestion active.")
 
         self._thread = threading.Thread(target=run_loop, daemon=True)
         self._thread.start()
 
+    def stop(self):
+        if not self._is_running:
+            return
+        self._is_running = False
+        if self.client:
+            try:
+                self.client.disconnect()
+                self.client.loop_stop()
+                logger.info("MQTT Client disconnected cleanly.")
+            except Exception as e:
+                logger.warning(f"Error disconnecting MQTT client: {e}")
+
 mqtt_client = MQTTClient()
+

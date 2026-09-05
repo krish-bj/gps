@@ -20,6 +20,22 @@ class TelemetryRepository:
             .limit(limit)\
             .all()
 
+    def get_filtered_history(
+        self,
+        vehicle_id: int,
+        from_time: Optional[datetime] = None,
+        to_time: Optional[datetime] = None,
+        limit: int = 100
+    ) -> List[GPSTelemetry]:
+        query = self.db.query(GPSTelemetry).filter(GPSTelemetry.vehicle_id == vehicle_id)
+        if from_time:
+            query = query.filter(GPSTelemetry.recorded_at >= from_time)
+        if to_time:
+            query = query.filter(GPSTelemetry.recorded_at <= to_time)
+        
+        return query.order_by(GPSTelemetry.recorded_at.desc()).limit(limit).all()
+
+
     def create(self, vehicle_id: int, latitude: float, longitude: float, speed_kmh: float, heading: float, timestamp: Optional[datetime] = None, source: str = "REST") -> GPSTelemetry:
         ts = timestamp or datetime.now(timezone.utc)
         telemetry = GPSTelemetry(

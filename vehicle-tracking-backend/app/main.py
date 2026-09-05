@@ -34,6 +34,11 @@ async def lifespan(app: FastAPI):
 
     yield
 
+    # 4. Clean shutdown for background services
+    logger.info("Shutting down background services...")
+    mqtt_client.stop()
+
+
 app = FastAPI(
     title=settings.PROJECT_NAME,
     openapi_url=f"{settings.API_V1_STR}/openapi.json",

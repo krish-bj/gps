@@ -56,10 +56,17 @@ class Settings(BaseSettings):
     # MQTT Configuration
     MQTT_HOST: str = Field(default="localhost", description="MQTT Broker Host")
     MQTT_PORT: int = Field(default=1883, description="MQTT Broker Port")
-    MQTT_USERNAME: Optional[str] = Field(default=None, description="MQTT Broker Username")
-    MQTT_PASSWORD: Optional[str] = Field(default=None, description="MQTT Broker Password")
-    MQTT_TOPIC_PREFIX: str = Field(default="vehicles/+/telemetry", description="MQTT Subscription Topic")
+    MQTT_USERNAME: Optional[str] = Field(default="gps_ingest_user", description="MQTT Broker Username")
+    MQTT_PASSWORD: Optional[str] = Field(default="gps_secure_pass_2026", description="MQTT Broker Password")
+    MQTT_TOPIC_PREFIX: str = Field(default="vehicles/+/gps", description="MQTT Subscription Topic")
     MQTT_ENABLED: bool = Field(default=True, description="MQTT Service Enabled Flag")
+
+
+    # GPS Status & Ingestion Configuration
+    GPS_ONLINE_THRESHOLD_SECONDS: int = Field(default=30, description="Threshold in seconds for ONLINE status")
+    GPS_STALE_THRESHOLD_SECONDS: int = Field(default=180, description="Threshold in seconds for STALE status")
+    GPS_INGEST_API_KEY: str = Field(default="dev_gps_ingest_secret_key_2026", description="API Key for device GPS REST Ingestion")
+
 
     model_config = SettingsConfigDict(
         env_file=".env",

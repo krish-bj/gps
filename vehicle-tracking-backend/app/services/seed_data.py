@@ -1,38 +1,51 @@
 import json
+import logging
 from datetime import datetime, timezone
 from sqlalchemy.orm import Session
+from app.core.config import settings
 from app.core.security import get_password_hash
 from app.models.models import User, BusRoute, Vehicle, GPSTelemetry, RoutePoint, UserAssignment
 
+logger = logging.getLogger("seed_service")
+
+# Predefined Development / Demo Route Points
 ROUTE_A_WAYPOINTS = [
-    {"lat": 37.774929, "lng": -122.419416, "name": "Stop 1: Central Station", "stop_order": 1},
-    {"lat": 37.778500, "lng": -122.415000, "name": "Stop 2: Civic Center", "stop_order": 2},
-    {"lat": 37.783333, "lng": -122.408889, "name": "Stop 3: Market Street", "stop_order": 3},
-    {"lat": 37.788500, "lng": -122.402000, "name": "Stop 4: Financial District", "stop_order": 4},
-    {"lat": 37.795000, "lng": -122.394000, "name": "Stop 5: Tech Park Terminal", "stop_order": 5},
+    {"sequence": 1, "lat": 12.971598, "lng": 77.594562, "name": "Stop 1: Downtown Hub"},
+    {"sequence": 2, "lat": 12.975000, "lng": 77.599000, "name": "Stop 2: City Center"},
+    {"sequence": 3, "lat": 12.980000, "lng": 77.605000, "name": "Stop 3: Commercial Zone"},
+    {"sequence": 4, "lat": 12.986000, "lng": 77.612000, "name": "Stop 4: Tech Hub East"},
+    {"sequence": 5, "lat": 12.992000, "lng": 77.620000, "name": "Stop 5: North Terminal"},
 ]
 
 ROUTE_B_WAYPOINTS = [
-    {"lat": 37.804400, "lng": -122.408000, "name": "Stop 1: Fisherman Wharf", "stop_order": 1},
-    {"lat": 37.800000, "lng": -122.418000, "name": "Stop 2: Russian Hill", "stop_order": 2},
-    {"lat": 37.791000, "lng": -122.427000, "name": "Stop 3: Pacific Heights", "stop_order": 3},
-    {"lat": 37.783000, "lng": -122.435000, "name": "Stop 4: Japantown", "stop_order": 4},
-    {"lat": 37.776000, "lng": -122.451000, "name": "Stop 5: University Campus", "stop_order": 5},
+    {"sequence": 1, "lat": 12.930000, "lng": 77.580000, "name": "Stop 1: South Terminal"},
+    {"sequence": 2, "lat": 12.940000, "lng": 77.585000, "name": "Stop 2: University Gate"},
+    {"sequence": 3, "lat": 12.950000, "lng": 77.590000, "name": "Stop 3: Hospital Square"},
+    {"sequence": 4, "lat": 12.960000, "lng": 77.595000, "name": "Stop 4: Metro Interchange"},
+    {"sequence": 5, "lat": 12.970000, "lng": 77.600000, "name": "Stop 5: Central Plaza"},
 ]
 
-def init_db_seed(db: Session):
+def init_db_seed(db: Session, force: bool = False):
     """
-    Populate seed data: Routes, RoutePoints, Vehicles, Users, Assignments, Telemetry.
+    Idempotent development seed script.
+    Populates demo users, routes, route points, vehicles, assignments, and initial GPS telemetry.
+    Strictly disabled in production unless force=True.
     """
-    # 1. Routes & RoutePoints
+    if settings.APP_ENV == "production" and not force:
+        logger.info("[SEED] Skipping automatic development data seed in production environment (APP_ENV='production').")
+        return
+
+    logger.info("[SEED] Seeding development / demo data...")
+
+    # 1. Seed Routes & RoutePoints
     route_a = db.query(BusRoute).filter(BusRoute.route_code == "ROUTE-101").first()
     if not route_a:
         route_a = BusRoute(
             route_code="ROUTE-101",
-            route_name="Route A - Downtown Express",
-            description="High frequency route connecting Central Station to Tech Park",
-            start_location="Central Station",
-            end_location="Tech Park Terminal",
+            route_name="Route A - Downtown Express [DEV DEMO]",
+            description="[DEV DATA] High frequency express route connecting Downtown Hub to North Terminal",
+            start_location="Downtown Hub",
+            end_location="North Terminal",
             waypoints_json=json.dumps(ROUTE_A_WAYPOINTS)
         )
         db.add(route_a)
@@ -41,21 +54,22 @@ def init_db_seed(db: Session):
         for wp in ROUTE_A_WAYPOINTS:
             rp = RoutePoint(
                 route_id=route_a.id,
-                sequence=wp["stop_order"],
+                sequence=wp["sequence"],
                 latitude=wp["lat"],
                 longitude=wp["lng"],
                 name=wp["name"]
             )
             db.add(rp)
+        db.flush()
 
     route_b = db.query(BusRoute).filter(BusRoute.route_code == "ROUTE-202").first()
     if not route_b:
         route_b = BusRoute(
             route_code="ROUTE-202",
-            route_name="Route B - Uptown Shuttle",
-            description="Scenic shuttle route connecting Fisherman Wharf to University Campus",
-            start_location="Fisherman Wharf",
-            end_location="University Campus",
+            route_name="Route B - Uptown Shuttle [DEV DEMO]",
+            description="[DEV DATA] Scenic shuttle route connecting South Terminal to Central Plaza",
+            start_location="South Terminal",
+            end_location="Central Plaza",
             waypoints_json=json.dumps(ROUTE_B_WAYPOINTS)
         )
         db.add(route_b)
@@ -64,25 +78,26 @@ def init_db_seed(db: Session):
         for wp in ROUTE_B_WAYPOINTS:
             rp = RoutePoint(
                 route_id=route_b.id,
-                sequence=wp["stop_order"],
+                sequence=wp["sequence"],
                 latitude=wp["lat"],
                 longitude=wp["lng"],
                 name=wp["name"]
             )
             db.add(rp)
+        db.flush()
 
-    # 2. Vehicles
+    # 2. Seed Vehicles
     vehicle_1 = db.query(Vehicle).filter(Vehicle.vehicle_code == "BUS-001").first()
     if not vehicle_1:
         vehicle_1 = Vehicle(
             vehicle_code="BUS-001",
-            license_plate="CA-7789-EX",
-            model_name="Volvo Electric Bus 7900",
-            status="MOVING",
+            license_plate="BUS-1001-PLATE",
+            model_name="Standard Transit Bus [DEV DEMO]",
+            status="ONLINE",
             assigned_route_id=route_a.id,
             last_latitude=ROUTE_A_WAYPOINTS[0]["lat"],
             last_longitude=ROUTE_A_WAYPOINTS[0]["lng"],
-            last_speed=38.5,
+            last_speed=0.0,
             last_timestamp=datetime.now(timezone.utc)
         )
         db.add(vehicle_1)
@@ -92,36 +107,37 @@ def init_db_seed(db: Session):
     if not vehicle_2:
         vehicle_2 = Vehicle(
             vehicle_code="BUS-002",
-            license_plate="CA-9941-SH",
-            model_name="BYD K9 Electric Bus",
-            status="MOVING",
+            license_plate="BUS-2002-PLATE",
+            model_name="City Express Bus [DEV DEMO]",
+            status="ONLINE",
             assigned_route_id=route_b.id,
             last_latitude=ROUTE_B_WAYPOINTS[0]["lat"],
             last_longitude=ROUTE_B_WAYPOINTS[0]["lng"],
-            last_speed=42.0,
+            last_speed=0.0,
             last_timestamp=datetime.now(timezone.utc)
         )
         db.add(vehicle_2)
         db.flush()
 
-    # 3. Users & UserAssignments
+    # 3. Seed Users & Enforce Assignments
     admin = db.query(User).filter(User.email == "admin@example.com").first()
     if not admin:
         admin = User(
             email="admin@example.com",
-            full_name="Fleet Administrator",
+            full_name="System Administrator [DEV DEMO]",
             password_hash=get_password_hash("admin123"),
             role="admin",
             assigned_route_id=route_a.id,
             assigned_vehicle_id=vehicle_1.id
         )
         db.add(admin)
+        db.flush()
 
     user_a = db.query(User).filter(User.email == "usera@example.com").first()
     if not user_a:
         user_a = User(
             email="usera@example.com",
-            full_name="User A (Route A Driver)",
+            full_name="User A [DEV DEMO]",
             password_hash=get_password_hash("user123"),
             role="user",
             assigned_route_id=route_a.id,
@@ -130,6 +146,11 @@ def init_db_seed(db: Session):
         db.add(user_a)
         db.flush()
 
+    assign_a = db.query(UserAssignment).filter(
+        UserAssignment.user_id == user_a.id,
+        UserAssignment.is_active == True
+    ).first()
+    if not assign_a:
         assign_a = UserAssignment(
             user_id=user_a.id,
             route_id=route_a.id,
@@ -142,7 +163,7 @@ def init_db_seed(db: Session):
     if not user_b:
         user_b = User(
             email="userb@example.com",
-            full_name="User B (Route B Driver)",
+            full_name="User B [DEV DEMO]",
             password_hash=get_password_hash("user123"),
             role="user",
             assigned_route_id=route_b.id,
@@ -151,6 +172,11 @@ def init_db_seed(db: Session):
         db.add(user_b)
         db.flush()
 
+    assign_b = db.query(UserAssignment).filter(
+        UserAssignment.user_id == user_b.id,
+        UserAssignment.is_active == True
+    ).first()
+    if not assign_b:
         assign_b = UserAssignment(
             user_id=user_b.id,
             route_id=route_b.id,
@@ -159,14 +185,14 @@ def init_db_seed(db: Session):
         )
         db.add(assign_b)
 
-    # 4. Telemetry Logs
+    # 4. Seed Initial Telemetry Records
     if db.query(GPSTelemetry).filter(GPSTelemetry.vehicle_id == vehicle_1.id).count() == 0:
         telemetry_1 = GPSTelemetry(
             vehicle_id=vehicle_1.id,
             latitude=ROUTE_A_WAYPOINTS[0]["lat"],
             longitude=ROUTE_A_WAYPOINTS[0]["lng"],
-            speed=38.5,
-            heading=45.0,
+            speed=0.0,
+            heading=0.0,
             recorded_at=datetime.now(timezone.utc),
             received_at=datetime.now(timezone.utc),
             source="REST"
@@ -178,8 +204,8 @@ def init_db_seed(db: Session):
             vehicle_id=vehicle_2.id,
             latitude=ROUTE_B_WAYPOINTS[0]["lat"],
             longitude=ROUTE_B_WAYPOINTS[0]["lng"],
-            speed=42.0,
-            heading=120.0,
+            speed=0.0,
+            heading=0.0,
             recorded_at=datetime.now(timezone.utc),
             received_at=datetime.now(timezone.utc),
             source="REST"
@@ -187,3 +213,5 @@ def init_db_seed(db: Session):
         db.add(telemetry_2)
 
     db.commit()
+    logger.info("[SEED] Development data seeded successfully (Idempotent execution verified).")
+

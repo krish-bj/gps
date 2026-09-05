@@ -26,3 +26,7 @@ Thumbs.db
 dist/
 build/
 *.egg-info/
+
+AI_CODING_GUIDELINES.md
+
+

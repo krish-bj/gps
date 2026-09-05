@@ -19,7 +19,7 @@ services:
       timeout: 5s
       retries: 5
 
-  # Mosquitto MQTT Broker
+  # Mosquitto MQTT Broker (Security Enforced)
   mqtt:
     image: eclipse-mosquitto:2.0
     container_name: vehicle_mqtt_broker
@@ -28,6 +28,7 @@ services:
       - "9001:9001"
     volumes:
       - ./mosquitto.conf:/mosquitto/config/mosquitto.conf
+      - ./mosquitto_pwfile:/mosquitto/config/pwfile
 
   # FastAPI Backend Service
   backend:
@@ -41,12 +42,15 @@ services:
       DATABASE_URL: "postgresql://postgres:postgrespassword@db:5432/vehicle_tracking_db"
       MQTT_BROKER_HOST: "mqtt"
       MQTT_BROKER_PORT: 1883
+      MQTT_USERNAME: "gps_ingest_user"
+      MQTT_PASSWORD: "gps_secure_pass_2026"
       SECRET_KEY: "supersecretjwtkey_vehicle_tracking_2026_dev_prod"
     depends_on:
       db:
         condition: service_healthy
       mqtt:
         condition: service_started
+
 
 volumes:
   postgres_data:
