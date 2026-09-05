@@ -14,21 +14,21 @@ from app.schemas.schemas import (
     GPSTelemetryResponse, UserAssignedRouteResponse, Waypoint
 )
 
+from app.services.assignment_service import AssignmentService
+
 class TrackingService:
     def __init__(self, db: Session):
         self.db = db
+        self.assignment_service = AssignmentService(db)
         self.user_repo = UserRepository(db)
         self.route_repo = RouteRepository(db)
         self.vehicle_repo = VehicleRepository(db)
         self.telemetry_repo = TelemetryRepository(db)
 
     def get_assigned_route_for_user(self, user: User) -> UserAssignedRouteResponse:
-        if not user.assigned_route_id or not user.assigned_vehicle_id:
-            raise EntityNotFoundException("Assigned Route/Vehicle", "user_me")
-
-        route = self.route_repo.get_by_id(user.assigned_route_id)
-        if not route:
-            raise EntityNotFoundException("BusRoute", user.assigned_route_id)
+        details = self.assignment_service.get_user_assigned_details(user)
+        route = details["route"]
+        vehicle = details["vehicle"]
 
         waypoints_list = [Waypoint(**wp) for wp in parse_json_waypoints(route.waypoints_json)]
         route_resp = BusRouteResponse(
@@ -42,7 +42,6 @@ class TrackingService:
             created_at=route.created_at
         )
 
-        vehicle = self.vehicle_repo.get_by_id(user.assigned_vehicle_id)
         vehicle_resp = VehicleResponse.model_validate(vehicle) if vehicle else None
 
         latest_telemetry = self.telemetry_repo.get_latest_by_vehicle_id(vehicle.id) if vehicle else None
@@ -56,12 +55,11 @@ class TrackingService:
         )
 
     def verify_vehicle_access(self, user: User, vehicle_id: int):
-        if user.role != "admin" and user.assigned_vehicle_id != vehicle_id:
-            raise ForbiddenAccessException(f"User '{user.email}' is forbidden from accessing vehicle ID {vehicle_id}.")
+        return self.assignment_service.verify_vehicle_access(user, vehicle_id)
 
     def verify_route_access(self, user: User, route_id: int):
-        if user.role != "admin" and user.assigned_route_id != route_id:
-            raise ForbiddenAccessException(f"User '{user.email}' is forbidden from accessing route ID {route_id}.")
+        return self.assignment_service.verify_route_access(user, route_id)
+
 
     def get_latest_vehicle_location(self, user: User, vehicle_id: int) -> GPSTelemetryResponse:
         self.verify_vehicle_access(user, vehicle_id)

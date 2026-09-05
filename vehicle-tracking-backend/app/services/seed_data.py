@@ -2,7 +2,7 @@ import json
 from datetime import datetime, timezone
 from sqlalchemy.orm import Session
 from app.core.security import get_password_hash
-from app.models.models import User, BusRoute, Vehicle, GPSTelemetry
+from app.models.models import User, BusRoute, Vehicle, GPSTelemetry, RoutePoint, UserAssignment
 
 ROUTE_A_WAYPOINTS = [
     {"lat": 37.774929, "lng": -122.419416, "name": "Stop 1: Central Station", "stop_order": 1},
@@ -22,9 +22,9 @@ ROUTE_B_WAYPOINTS = [
 
 def init_db_seed(db: Session):
     """
-    Populate seed data: Routes, Vehicles, Users, initial Telemetry.
+    Populate seed data: Routes, RoutePoints, Vehicles, Users, Assignments, Telemetry.
     """
-    # 1. Routes
+    # 1. Routes & RoutePoints
     route_a = db.query(BusRoute).filter(BusRoute.route_code == "ROUTE-101").first()
     if not route_a:
         route_a = BusRoute(
@@ -38,6 +38,16 @@ def init_db_seed(db: Session):
         db.add(route_a)
         db.flush()
 
+        for wp in ROUTE_A_WAYPOINTS:
+            rp = RoutePoint(
+                route_id=route_a.id,
+                sequence=wp["stop_order"],
+                latitude=wp["lat"],
+                longitude=wp["lng"],
+                name=wp["name"]
+            )
+            db.add(rp)
+
     route_b = db.query(BusRoute).filter(BusRoute.route_code == "ROUTE-202").first()
     if not route_b:
         route_b = BusRoute(
@@ -50,6 +60,16 @@ def init_db_seed(db: Session):
         )
         db.add(route_b)
         db.flush()
+
+        for wp in ROUTE_B_WAYPOINTS:
+            rp = RoutePoint(
+                route_id=route_b.id,
+                sequence=wp["stop_order"],
+                latitude=wp["lat"],
+                longitude=wp["lng"],
+                name=wp["name"]
+            )
+            db.add(rp)
 
     # 2. Vehicles
     vehicle_1 = db.query(Vehicle).filter(Vehicle.vehicle_code == "BUS-001").first()
@@ -84,13 +104,13 @@ def init_db_seed(db: Session):
         db.add(vehicle_2)
         db.flush()
 
-    # 3. Users
+    # 3. Users & UserAssignments
     admin = db.query(User).filter(User.email == "admin@example.com").first()
     if not admin:
         admin = User(
             email="admin@example.com",
             full_name="Fleet Administrator",
-            hashed_password=get_password_hash("admin123"),
+            password_hash=get_password_hash("admin123"),
             role="admin",
             assigned_route_id=route_a.id,
             assigned_vehicle_id=vehicle_1.id
@@ -102,24 +122,42 @@ def init_db_seed(db: Session):
         user_a = User(
             email="usera@example.com",
             full_name="User A (Route A Driver)",
-            hashed_password=get_password_hash("user123"),
+            password_hash=get_password_hash("user123"),
             role="user",
             assigned_route_id=route_a.id,
             assigned_vehicle_id=vehicle_1.id
         )
         db.add(user_a)
+        db.flush()
+
+        assign_a = UserAssignment(
+            user_id=user_a.id,
+            route_id=route_a.id,
+            vehicle_id=vehicle_1.id,
+            is_active=True
+        )
+        db.add(assign_a)
 
     user_b = db.query(User).filter(User.email == "userb@example.com").first()
     if not user_b:
         user_b = User(
             email="userb@example.com",
             full_name="User B (Route B Driver)",
-            hashed_password=get_password_hash("user123"),
+            password_hash=get_password_hash("user123"),
             role="user",
             assigned_route_id=route_b.id,
             assigned_vehicle_id=vehicle_2.id
         )
         db.add(user_b)
+        db.flush()
+
+        assign_b = UserAssignment(
+            user_id=user_b.id,
+            route_id=route_b.id,
+            vehicle_id=vehicle_2.id,
+            is_active=True
+        )
+        db.add(assign_b)
 
     # 4. Telemetry Logs
     if db.query(GPSTelemetry).filter(GPSTelemetry.vehicle_id == vehicle_1.id).count() == 0:
@@ -127,9 +165,11 @@ def init_db_seed(db: Session):
             vehicle_id=vehicle_1.id,
             latitude=ROUTE_A_WAYPOINTS[0]["lat"],
             longitude=ROUTE_A_WAYPOINTS[0]["lng"],
-            speed_kmh=38.5,
+            speed=38.5,
             heading=45.0,
-            timestamp=datetime.now(timezone.utc)
+            recorded_at=datetime.now(timezone.utc),
+            received_at=datetime.now(timezone.utc),
+            source="REST"
         )
         db.add(telemetry_1)
 
@@ -138,9 +178,11 @@ def init_db_seed(db: Session):
             vehicle_id=vehicle_2.id,
             latitude=ROUTE_B_WAYPOINTS[0]["lat"],
             longitude=ROUTE_B_WAYPOINTS[0]["lng"],
-            speed_kmh=42.0,
+            speed=42.0,
             heading=120.0,
-            timestamp=datetime.now(timezone.utc)
+            recorded_at=datetime.now(timezone.utc),
+            received_at=datetime.now(timezone.utc),
+            source="REST"
         )
         db.add(telemetry_2)
 

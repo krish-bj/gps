@@ -1,6 +1,6 @@
 from datetime import datetime
 from typing import Optional, List
-from pydantic import BaseModel, EmailStr, Field, field_validator, ConfigDict
+from pydantic import BaseModel, EmailStr, Field, field_validator, ConfigDict, computed_field
 
 from app.schemas.user import UserBase, UserCreate, UserUpdate, UserResponse
 from app.schemas.route_point import RoutePointBase, RoutePointResponse
@@ -10,6 +10,8 @@ from app.schemas.user_assignment import UserAssignmentResponse
 class Token(BaseModel):
     access_token: str
     token_type: str = "bearer"
+    expires_in: int = 604800
+    user: Optional[UserResponse] = None
 
 class TokenPayload(BaseModel):
     sub: Optional[str] = None
@@ -38,6 +40,11 @@ class BusRouteResponse(BusRouteBase):
     waypoints: List[Waypoint] = []
     route_points: List[RoutePointResponse] = []
     created_at: datetime
+
+    @computed_field
+    @property
+    def name(self) -> str:
+        return self.route_name
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -91,7 +98,18 @@ class VehicleResponse(VehicleBase):
     last_speed: Optional[float] = None
     last_timestamp: Optional[datetime] = None
 
+    @computed_field
+    @property
+    def registration_number(self) -> str:
+        return self.license_plate
+
+    @computed_field
+    @property
+    def display_name(self) -> str:
+        return self.model_name
+
     model_config = ConfigDict(from_attributes=True)
+
 
 # Combined Assigned Route & Vehicle Schema for Mobile App
 class UserAssignedRouteResponse(BaseModel):
