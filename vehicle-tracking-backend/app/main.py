@@ -60,17 +60,23 @@ app = FastAPI(
 
 # 1. Environment-Aware CORS Middleware Configuration
 cors_origins = settings.ALLOWED_ORIGINS
-allow_credentials = True
-if "*" in cors_origins and settings.APP_ENV == "production":
-    cors_origins = ["http://localhost:3000"]
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=cors_origins,
-    allow_credentials=allow_credentials,
-    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allow_headers=["*"],
-)
+if "*" in cors_origins:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origin_regex=r".*",
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+else:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=cors_origins,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
 # 2. Trusted Host Header Middleware
 if "*" not in settings.ALLOWED_HOSTS:
