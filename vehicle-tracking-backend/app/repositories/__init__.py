@@ -1,0 +1,4 @@
+from app.repositories.user_repository import UserRepository
+from app.repositories.route_repository import RouteRepository
+from app.repositories.vehicle_repository import VehicleRepository
+from app.repositories.telemetry_repository import TelemetryRepository

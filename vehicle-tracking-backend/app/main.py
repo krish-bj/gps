@@ -1,31 +1,36 @@
 import logging
 from contextlib import asynccontextmanager
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.v1.api import api_router
+from app.api.v1.router import api_router
 from app.core.config import settings
-from app.core.database import engine, Base, SessionLocal
-from app.services.seed_data import init_db_seed
-from app.services.mqtt_service import mqtt_service
+from app.db.session import engine, SessionLocal
+from app.db.base import Base
+from app.services.seed_service import SeedService
+from app.mqtt.client import mqtt_client
+from app.exceptions.custom_exceptions import VehicleTrackingException
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("fastapi_backend")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Initialize database tables
+    # 1. Initialize DB tables
+    logger.info("Initializing database schema...")
     Base.metadata.create_all(bind=engine)
 
-    # Seed initial routes, vehicles, users, and telemetry
+    # 2. Seed initial data
     db = SessionLocal()
     try:
-        init_db_seed(db)
+        seeder = SeedService(db)
+        seeder.seed_initial_data()
     finally:
         db.close()
 
-    # Start MQTT background service
-    mqtt_service.start()
+    # 3. Start MQTT Client listener
+    mqtt_client.start()
 
     yield
 
@@ -37,6 +42,7 @@ app = FastAPI(
     lifespan=lifespan
 )
 
+# CORS Middleware Configuration
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -45,17 +51,32 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(api_router, prefix=settings.API_V1_STR)
+# Global Custom Exception Handler
+@app.exception_handler(VehicleTrackingException)
+async def vehicle_tracking_exception_handler(request: Request, exc: VehicleTrackingException):
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": exc.message}
+    )
 
-@app.get("/")
-def root():
+# Health Check Endpoint (Root & /health)
+@app.get("/health", tags=["Health"])
+def health_check():
+    return {
+        "status": "healthy",
+        "system": settings.PROJECT_NAME,
+        "version": "1.0.0"
+    }
+
+@app.get("/", tags=["Health"])
+def root_check():
     return {
         "system": settings.PROJECT_NAME,
         "status": "ONLINE",
+        "health": "/health",
         "docs": f"{settings.API_V1_STR}/docs",
         "api_v1": settings.API_V1_STR
     }
 
-@app.get("/health")
-def health_check():
-    return {"status": "healthy"}
+# Include Versioned API Router (/api/v1)
+app.include_router(api_router, prefix=settings.API_V1_STR)

@@ -1,18 +1,22 @@
+import sys
+import os
 from logging.config import fileConfig
+
 from sqlalchemy import engine_from_config, pool
 from alembic import context
 
-import sys
-import os
-
-# Include parent directory in sys.path
+# Ensure app package is in sys.path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from app.core.config import settings
-from app.core.database import Base
-from app.models.models import User, BusRoute, Vehicle, GPSTelemetry
+from app.db.base import Base
+
+# Import all SQLAlchemy models to ensure Alembic autogenerate detects all schema entities
+from app.models.models import User, BusRoute, Vehicle, GPSTelemetry  # noqa: F401
 
 config = context.config
+
+# Dynamically set Database URL from application settings (works inside & outside Docker)
 config.set_main_option("sqlalchemy.url", settings.DATABASE_URL)
 
 if config.config_file_name:
@@ -21,27 +25,35 @@ if config.config_file_name:
 target_metadata = Base.metadata
 
 def run_migrations_offline() -> None:
+    """Run migrations in 'offline' mode."""
     url = config.get_main_option("sqlalchemy.url")
     context.configure(
         url=url,
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
+        compare_type=True,
     )
 
     with context.begin_transaction():
         context.run_migrations()
 
 def run_migrations_online() -> None:
+    """Run migrations in 'online' mode."""
+    configuration = config.get_section(config.config_ini_section, {})
+    configuration["sqlalchemy.url"] = settings.DATABASE_URL
+
     connectable = engine_from_config(
-        config.get_section(config.config_ini_section, {}),
+        configuration,
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
     )
 
     with connectable.connect() as connection:
         context.configure(
-            connection=connection, target_metadata=target_metadata
+            connection=connection,
+            target_metadata=target_metadata,
+            compare_type=True,
         )
 
         with context.begin_transaction():

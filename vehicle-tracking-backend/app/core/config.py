@@ -1,26 +1,116 @@
+import os
+from typing import Optional, Dict, Any
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
-    PROJECT_NAME: str = "GPS Vehicle Tracking System Backend"
-    API_V1_STR: str = "/api/v1"
+    # Application Configuration
+    APP_NAME: str = Field(default="GPS Vehicle Tracking System Backend", description="Application Name")
+    APP_ENV: str = Field(default="development", description="Environment: development, testing, production")
+    DEBUG: bool = Field(default=False, description="Debug mode flag")
+    API_V1_PREFIX: str = Field(default="/api/v1", description="API Version 1 Prefix")
     
-    SECRET_KEY: str = "supersecretjwtkey_vehicle_tracking_2026_dev_prod"
-    ALGORITHM: str = "HS256"
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 7  # 7 days
-    
-    # Database configuration (defaults to SQLite, PostgreSQL supported via env)
-    DATABASE_URL: str = "sqlite:///./vehicle_tracking.db"
-    
-    # MQTT Broker Configuration
-    MQTT_BROKER_HOST: str = "localhost"
-    MQTT_BROKER_PORT: int = 1883
-    MQTT_TOPIC: str = "vehicles/+/telemetry"
-    MQTT_ENABLED: bool = True
+    # Backward compatibility aliases
+    @property
+    def PROJECT_NAME(self) -> str:
+        return self.APP_NAME
+
+    @property
+    def API_V1_STR(self) -> str:
+        return self.API_V1_PREFIX
+
+    @property
+    def SECRET_KEY(self) -> str:
+        return self.JWT_SECRET_KEY
+
+    @property
+    def ALGORITHM(self) -> str:
+        return self.JWT_ALGORITHM
+
+    @property
+    def MQTT_BROKER_HOST(self) -> str:
+        return self.MQTT_HOST
+
+    @property
+    def MQTT_BROKER_PORT(self) -> int:
+        return self.MQTT_PORT
+
+    @property
+    def MQTT_TOPIC(self) -> str:
+        return self.MQTT_TOPIC_PREFIX
+
+    # Database Configuration
+    DATABASE_URL: str = Field(
+        default="sqlite:///./vehicle_tracking.db",
+        description="Database Connection URL (PostgreSQL or SQLite)"
+    )
+
+    # JWT Authentication Configuration
+    JWT_SECRET_KEY: str = Field(
+        default="change_this_to_a_secure_32_character_random_key_for_dev",
+        description="Secret key for JWT encoding and decoding"
+    )
+    JWT_ALGORITHM: str = Field(default="HS256", description="JWT Signing Algorithm")
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = Field(default=10080, description="Token Expiration in Minutes (default 7 days)")
+
+    # MQTT Configuration
+    MQTT_HOST: str = Field(default="localhost", description="MQTT Broker Host")
+    MQTT_PORT: int = Field(default=1883, description="MQTT Broker Port")
+    MQTT_USERNAME: Optional[str] = Field(default=None, description="MQTT Broker Username")
+    MQTT_PASSWORD: Optional[str] = Field(default=None, description="MQTT Broker Password")
+    MQTT_TOPIC_PREFIX: str = Field(default="vehicles/+/telemetry", description="MQTT Subscription Topic")
+    MQTT_ENABLED: bool = Field(default=True, description="MQTT Service Enabled Flag")
 
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
         extra="ignore"
     )
+
+    @model_validator(mode="after")
+    def validate_production_configuration(self) -> "Settings":
+        """
+        Validation logic: Fail clearly when mandatory production configuration is missing or insecure.
+        """
+        if self.APP_ENV == "production":
+            # 1. Enforce secure JWT Secret Key in production
+            if not self.JWT_SECRET_KEY or "change_this" in self.JWT_SECRET_KEY or len(self.JWT_SECRET_KEY) < 32:
+                raise ValueError(
+                    "CRITICAL SECURITY ERROR: 'JWT_SECRET_KEY' must be set to a secure, random key of at least 32 characters when APP_ENV='production'."
+                )
+            
+            # 2. Enforce PostgreSQL database URL in production
+            if self.DATABASE_URL.startswith("sqlite"):
+                raise ValueError(
+                    "CONFIGURATION ERROR: Production environment (APP_ENV='production') must use PostgreSQL for 'DATABASE_URL', not SQLite."
+                )
+
+        return self
+
+    def safe_dict(self) -> Dict[str, Any]:
+        """
+        Returns safe, non-sensitive configuration parameters for diagnostic logging or public metadata endpoints.
+        Masks secrets like JWT_SECRET_KEY, MQTT_PASSWORD, and Database password.
+        """
+        db_url_masked = self.DATABASE_URL
+        if "@" in db_url_masked:
+            # Mask user:password in PostgreSQL connection string
+            prefix, rest = db_url_masked.split("@", 1)
+            db_url_masked = f"postgresql://***:***@{rest}"
+
+        return {
+            "APP_NAME": self.APP_NAME,
+            "APP_ENV": self.APP_ENV,
+            "DEBUG": self.DEBUG,
+            "API_V1_PREFIX": self.API_V1_PREFIX,
+            "DATABASE_URL": db_url_masked,
+            "JWT_ALGORITHM": self.JWT_ALGORITHM,
+            "ACCESS_TOKEN_EXPIRE_MINUTES": self.ACCESS_TOKEN_EXPIRE_MINUTES,
+            "MQTT_HOST": self.MQTT_HOST,
+            "MQTT_PORT": self.MQTT_PORT,
+            "MQTT_TOPIC_PREFIX": self.MQTT_TOPIC_PREFIX,
+            "MQTT_ENABLED": self.MQTT_ENABLED,
+            "MQTT_AUTHENTICATED": bool(self.MQTT_USERNAME and self.MQTT_PASSWORD),
+        }
 
 settings = Settings()

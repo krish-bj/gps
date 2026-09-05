@@ -8,12 +8,21 @@ from sqlalchemy.orm import sessionmaker
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from app.main import app
-from app.core.database import Base, get_db
+from app.db.base import Base
+from app.db.session import get_db
 from app.core.security import create_access_token
 from app.services.seed_data import init_db_seed
-from app.models.models import User, BusRoute, Vehicle
+from app.models.models import User
 
-TEST_SQLALCHEMY_DATABASE_URL = "sqlite:///./test_vehicle_tracking.db"
+TEST_DB_FILE = "./test_vehicle_tracking.db"
+TEST_SQLALCHEMY_DATABASE_URL = f"sqlite:///{TEST_DB_FILE}"
+
+# Remove old test DB if present
+if os.path.exists(TEST_DB_FILE):
+    try:
+        os.remove(TEST_DB_FILE)
+    except Exception:
+        pass
 
 engine = create_engine(
     TEST_SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False}
@@ -29,9 +38,9 @@ def setup_test_db():
     db.close()
     yield
     Base.metadata.drop_all(bind=engine)
-    if os.path.exists("./test_vehicle_tracking.db"):
+    if os.path.exists(TEST_DB_FILE):
         try:
-            os.remove("./test_vehicle_tracking.db")
+            os.remove(TEST_DB_FILE)
         except Exception:
             pass
 

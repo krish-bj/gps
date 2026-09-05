@@ -1,6 +1,10 @@
 from datetime import datetime
 from typing import Optional, List
-from pydantic import BaseModel, EmailStr, ConfigDict
+from pydantic import BaseModel, EmailStr, Field, field_validator, ConfigDict
+
+from app.schemas.user import UserBase, UserCreate, UserUpdate, UserResponse
+from app.schemas.route_point import RoutePointBase, RoutePointResponse
+from app.schemas.user_assignment import UserAssignmentResponse
 
 # Authentication Schemas
 class Token(BaseModel):
@@ -16,8 +20,8 @@ class UserLogin(BaseModel):
 
 # Waypoint Schema
 class Waypoint(BaseModel):
-    lat: float
-    lng: float
+    lat: float = Field(..., ge=-90.0, le=90.0)
+    lng: float = Field(..., ge=-180.0, le=180.0)
     name: Optional[str] = None
     stop_order: Optional[int] = None
 
@@ -32,19 +36,28 @@ class BusRouteBase(BaseModel):
 class BusRouteResponse(BusRouteBase):
     id: int
     waypoints: List[Waypoint] = []
+    route_points: List[RoutePointResponse] = []
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
 
-# GPS Telemetry Schemas
+# GPS Telemetry Schemas with coordinate & speed validations
 class GPSTelemetryCreate(BaseModel):
     vehicle_code: Optional[str] = None
     vehicle_id: Optional[int] = None
-    latitude: float
-    longitude: float
-    speed_kmh: float = 0.0
-    heading: Optional[float] = 0.0
+    latitude: float = Field(..., ge=-90.0, le=90.0, description="Latitude from -90 to 90")
+    longitude: float = Field(..., ge=-180.0, le=180.0, description="Longitude from -180 to 180")
+    speed_kmh: float = Field(default=0.0, ge=0.0, description="Speed in km/h (cannot be negative)")
+    heading: Optional[float] = Field(default=0.0, ge=0.0, le=360.0)
     timestamp: Optional[datetime] = None
+    source: str = "REST"
+
+    @field_validator("speed_kmh")
+    @classmethod
+    def validate_speed(cls, v: float) -> float:
+        if v < 0.0:
+            raise ValueError("Speed cannot be negative.")
+        return v
 
 class GPSTelemetryResponse(BaseModel):
     id: int
@@ -53,7 +66,13 @@ class GPSTelemetryResponse(BaseModel):
     longitude: float
     speed_kmh: float
     heading: Optional[float] = 0.0
-    timestamp: datetime
+    recorded_at: datetime
+    received_at: datetime
+    source: str = "REST"
+
+    @property
+    def timestamp(self) -> datetime:
+        return self.recorded_at
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -71,20 +90,6 @@ class VehicleResponse(VehicleBase):
     last_longitude: Optional[float] = None
     last_speed: Optional[float] = None
     last_timestamp: Optional[datetime] = None
-
-    model_config = ConfigDict(from_attributes=True)
-
-# User Schemas
-class UserBase(BaseModel):
-    email: EmailStr
-    full_name: str
-    role: str = "user"
-
-class UserResponse(UserBase):
-    id: int
-    is_active: bool
-    assigned_route_id: Optional[int] = None
-    assigned_vehicle_id: Optional[int] = None
 
     model_config = ConfigDict(from_attributes=True)
 
