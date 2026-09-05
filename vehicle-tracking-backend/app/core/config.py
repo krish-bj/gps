@@ -63,6 +63,11 @@ class Settings(BaseSettings):
     MQTT_TOPIC_PREFIX: str = Field(default="vehicles/+/gps", description="MQTT Subscription Topic")
     MQTT_ENABLED: bool = Field(default=True, description="MQTT Service Enabled Flag")
 
+    # GPS Telemetry Thresholds & REST Key
+    GPS_INGEST_API_KEY: str = Field(default="dev_gps_ingest_secret_key_2026", description="API Key for REST ingestion")
+    GPS_ONLINE_THRESHOLD_SECONDS: int = Field(default=30, description="Threshold in seconds for ONLINE status")
+    GPS_STALE_THRESHOLD_SECONDS: int = Field(default=120, description="Threshold in seconds for STALE status")
+
 
     # CORS & Security Hardening Configuration
     ALLOWED_ORIGINS: list[str] = Field(

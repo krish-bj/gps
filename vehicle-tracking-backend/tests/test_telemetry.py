@@ -7,7 +7,7 @@ def test_telemetry_ingestion_and_history(client, user_a_headers, db_session):
         "speed_kmh": 41.5,
         "heading": 90.0
     }
-    response = client.post("/api/v1/gps/telemetry", json=payload)
+    response = client.post("/api/v1/gps/telemetry", json=payload, headers=user_a_headers)
     assert response.status_code == 201
     data = response.json()
     assert data["latitude"] == 37.7812

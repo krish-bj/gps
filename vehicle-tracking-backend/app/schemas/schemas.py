@@ -1,6 +1,6 @@
 from datetime import datetime
 from typing import Optional, List
-from pydantic import BaseModel, EmailStr, Field, field_validator, ConfigDict, computed_field
+from pydantic import BaseModel, EmailStr, Field, field_validator, model_validator, ConfigDict, computed_field
 
 from app.schemas.user import UserBase, UserCreate, UserUpdate, UserResponse
 from app.schemas.route_point import RoutePointBase, RoutePointResponse
@@ -26,6 +26,8 @@ class Waypoint(BaseModel):
     lng: float = Field(..., ge=-180.0, le=180.0)
     name: Optional[str] = None
     stop_order: Optional[int] = None
+    sequence: Optional[int] = None
+    is_stop: bool = False
 
 # Bus Route Schemas
 class BusRouteBase(BaseModel):
@@ -84,6 +86,10 @@ class GPSIngestPayload(BaseModel):
         if self.speed is None:
             self.speed = 0.0
         return self
+
+    @property
+    def effective_speed(self) -> float:
+        return self.speed_kmh if self.speed_kmh is not None else (self.speed or 0.0)
 
 
 class GPSTelemetryCreate(BaseModel):

@@ -1,6 +1,9 @@
+import logging
 from typing import List, Optional
 from datetime import datetime, timezone
 from sqlalchemy.orm import Session
+
+logger = logging.getLogger("tracking_service")
 
 from app.models.models import User, BusRoute, Vehicle, GPSTelemetry
 from app.repositories.user_repository import UserRepository
@@ -274,11 +277,6 @@ class TrackingService:
             limit=sane_limit
         )
         return [GPSTelemetryResponse.model_validate(log) for log in history]
-
-
-import logging
-
-logger = logging.getLogger("tracking_service")
 
     def ingest_telemetry(
         self,
