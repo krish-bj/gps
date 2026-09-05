@@ -1,3 +1,4 @@
+import logging
 from datetime import timedelta
 from sqlalchemy.orm import Session
 from app.core import security
@@ -6,6 +7,8 @@ from app.repositories.user_repository import UserRepository
 from app.schemas.user import UserResponse
 from app.exceptions.custom_exceptions import InvalidCredentialsException, ForbiddenAccessException
 
+logger = logging.getLogger("auth_service")
+
 class AuthService:
     def __init__(self, db: Session):
         self.user_repo = UserRepository(db)
@@ -13,10 +16,13 @@ class AuthService:
     def authenticate_user(self, email: str, password: str) -> dict:
         user = self.user_repo.get_by_email(email)
         if not user or not security.verify_password(password, user.hashed_password):
+            logger.warning(f"Authentication FAILED for email '{email}': Invalid credentials.")
             raise InvalidCredentialsException("Incorrect email or password.")
         if not user.is_active:
+            logger.warning(f"Authentication FAILED for email '{email}': Inactive account.")
             raise ForbiddenAccessException("Inactive user account.")
         
+        logger.info(f"Authentication SUCCESS for user '{email}' (Role: {user.role}). Access token issued.")
         expires_in_seconds = settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60
         access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
         token = security.create_access_token(
@@ -28,4 +34,5 @@ class AuthService:
             "expires_in": expires_in_seconds,
             "user": UserResponse.model_validate(user)
         }
+
 

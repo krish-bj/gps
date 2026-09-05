@@ -9,6 +9,8 @@ class Settings(BaseSettings):
     APP_ENV: str = Field(default="development", description="Environment: development, testing, production")
     DEBUG: bool = Field(default=False, description="Debug mode flag")
     API_V1_PREFIX: str = Field(default="/api/v1", description="API Version 1 Prefix")
+    LOG_LEVEL: str = Field(default="INFO", description="Logging level: DEBUG, INFO, WARNING, ERROR")
+
     
     # Backward compatibility aliases
     @property
@@ -62,11 +64,19 @@ class Settings(BaseSettings):
     MQTT_ENABLED: bool = Field(default=True, description="MQTT Service Enabled Flag")
 
 
-    # GPS Status & Ingestion Configuration
-    GPS_ONLINE_THRESHOLD_SECONDS: int = Field(default=30, description="Threshold in seconds for ONLINE status")
-    GPS_STALE_THRESHOLD_SECONDS: int = Field(default=180, description="Threshold in seconds for STALE status")
-    GPS_INGEST_API_KEY: str = Field(default="dev_gps_ingest_secret_key_2026", description="API Key for device GPS REST Ingestion")
-
+    # CORS & Security Hardening Configuration
+    ALLOWED_ORIGINS: list[str] = Field(
+        default=["http://localhost:3000", "http://localhost:8000", "http://127.0.0.1:3000", "http://localhost:8080", "*"],
+        description="Allowed CORS Origins"
+    )
+    ALLOWED_HOSTS: list[str] = Field(
+        default=["localhost", "127.0.0.1", "0.0.0.0", "*"],
+        description="Allowed HTTP Host Headers"
+    )
+    MAX_REQUEST_SIZE_BYTES: int = Field(
+        default=2 * 1024 * 1024,
+        description="Max allowed request body size in bytes (default 2MB)"
+    )
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -91,6 +101,13 @@ class Settings(BaseSettings):
                 raise ValueError(
                     "CONFIGURATION ERROR: Production environment (APP_ENV='production') must use PostgreSQL for 'DATABASE_URL', not SQLite."
                 )
+
+            # 3. Enforce secure CORS origins in production
+            if "*" in self.ALLOWED_ORIGINS:
+                raise ValueError(
+                    "SECURITY ERROR: Wildcard origins ('*') are prohibited in production (APP_ENV='production') when credentials are allowed. Specify exact domains in ALLOWED_ORIGINS."
+                )
+
 
         return self
 

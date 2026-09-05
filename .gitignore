@@ -1,3 +1,6 @@
+# Mobile App
+mobile_app/
+
 # Python Bytecode & Cache
 __pycache__/
 *.py[cod]
@@ -16,17 +19,15 @@ htmlcov/
 env/
 venv/
 
+# Flutter / Dart Build & Tooling
+.dart_tool/
+.pub/
+.pub-cache/
+build/
+
 # IDE & OS files
 .vscode/
 .idea/
+*.swp
 .DS_Store
 Thumbs.db
-
-# Build artifacts
-dist/
-build/
-*.egg-info/
-
-AI_CODING_GUIDELINES.md
-mobile_app/
-

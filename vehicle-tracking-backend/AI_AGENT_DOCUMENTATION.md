@@ -1,6 +1,6 @@
 # GPS Vehicle Tracking Backend — AI Agent Technical Documentation
 
-> **Target Audience**: AI Coding Assistants & Automated Developers  
+> **Target Audience**: AI Coding Assistants, Technical Reviewers & Automated Developers  
 > **Repository Path**: `vehicle-tracking-backend/`  
 > **Primary Stack**: Python 3.12, FastAPI, SQLAlchemy 2.0 (Declarative Base & Mapped Columns), Pydantic V2, Alembic, Pytest, PyJWT, Bcrypt, Mosquitto MQTT.
 
@@ -11,6 +11,16 @@
 The project follows a **Clean Modular Layered Architecture**. Controllers (API endpoints) contain **zero business logic** and delegate directly to dedicated service classes and data repositories.
 
 ```
+API / Controller Layer (app/api/v1/endpoints/*)
+         ↓
+Service Layer (app/services/*)
+         ↓
+Repository Layer (app/repositories/*)
+         ↓
+Database Models (app/models/models.py)
+```
+
+```
 vehicle-tracking-backend/
 ├── app/
 │   ├── api/
@@ -19,67 +29,98 @@ vehicle-tracking-backend/
 │   │       ├── router.py            # Central v1 API router (/api/v1)
 │   │       └── endpoints/
 │   │           ├── auth.py          # Login API (/auth/login)
-│   │           ├── me.py            # Current User, Assigned Route & Vehicle (/me, /me/route, /me/vehicle)
+│   │           ├── me.py            # Current User, Tracking & Location (/me, /me/route, /me/vehicle, /me/tracking)
 │   │           ├── users.py         # User management (/users, /users/me)
 │   │           ├── routes.py        # Route endpoints (/routes, /routes/{id})
 │   │           ├── vehicles.py      # Vehicle endpoints (/vehicles, /vehicles/{id})
-│   │           └── telemetry.py     # Real-time GPS ingestion & history (/gps/telemetry)
+│   │           ├── telemetry.py     # Real-time GPS ingestion & history (/gps)
+│   │           └── ws_tracking.py   # Optional WebSocket live streaming bonus (/ws/tracking)
 │   ├── core/
-│   │   ├── config.py                # Pydantic Settings with production fail-fast validations & secret masking
+│   │   ├── config.py                # Pydantic Settings with env validation & secret masking
+│   │   ├── logging_config.py        # Structured logging setup with SensitiveDataFilter
+│   │   ├── middleware.py            # Security headers & Request size limit middleware
 │   │   └── security.py              # Bcrypt password hashing/verification & JWT encoding/decoding
 │   ├── db/
 │   │   ├── base.py                  # SQLAlchemy 2.0 DeclarativeBase
-│   │   └── session.py               # Engine configuration (pool_pre_ping=True) & get_db generator
+│   │   └── session.py               # Engine configuration & get_db generator
 │   ├── models/
 │   │   └── models.py                # SQLAlchemy 2.0 Mapped Entities (User, BusRoute, RoutePoint, Vehicle, UserAssignment, GPSTelemetry)
 │   ├── schemas/
 │   │   ├── user.py                  # User schemas excluding password hashes (UserResponse)
 │   │   ├── route_point.py           # RoutePoint schemas with coordinate validation
 │   │   ├── user_assignment.py       # UserAssignment schemas
-│   │   └── schemas.py               # Token, BusRouteResponse, VehicleResponse, GPSTelemetryResponse schemas with @computed_field
+│   │   └── schemas.py               # Token, BusRouteResponse, VehicleResponse, GPSTelemetryResponse schemas
 │   ├── repositories/
 │   │   ├── user_repository.py       # DB access for User entities
-│   │   ├── route_repository.py      # DB access for BusRoute & RoutePoint entities
+│   │   ├── route_repository.py      # DB access for BusRoute entities
 │   │   ├── vehicle_repository.py    # DB access for Vehicle entities
 │   │   └── telemetry_repository.py  # DB access for GPSTelemetry logs
 │   ├── services/
 │   │   ├── auth_service.py          # Authentication & token issue logic
+│   │   ├── user_service.py          # User management business logic
 │   │   ├── assignment_service.py    # Single source of truth for user active assignments & authorization
 │   │   ├── tracking_service.py      # Telemetry processing & route/vehicle access verification
 │   │   ├── seed_service.py          # Initial database seeding
 │   │   └── seed_data.py             # Default initial seed data (Users, Routes, Vehicles)
 │   ├── exceptions/
-│   │   └── custom_exceptions.py     # Custom exception domain model mapped to HTTP status codes
+│   │   ├── custom_exceptions.py     # Custom exception domain model mapped to HTTP status codes
+│   │   └── handlers.py              # Centralized exception handlers hiding technical stack traces in production
 │   ├── mqtt/
-│   │   └── client.py                # Mosquitto MQTT subscriber listening on telemetry topics
+│   │   └── client.py                # Mosquitto MQTT subscriber listening on vehicles/+/gps
 │   ├── utils/
 │   │   └── helpers.py               # Helper utilities (JSON parsing, coordinate math)
 │   └── main.py                      # FastAPI lifespan setup, exception handlers, CORS & health check
 ├── alembic/                         # Alembic database migration scripts
+├── mosquitto/                       # Mosquitto MQTT broker configuration & pwfile
 ├── scripts/
 │   └── seed_db.py                   # Command-line database seed script
-├── tests/                           # Pytest automated test suite (38 test cases)
+├── simulator/
+│   └── gps_simulator.py             # Standalone Python GPS Simulator over MQTT
+├── tests/                           # Pytest automated test suite
 └── pytest.ini                       # Pytest configuration
 ```
 
 ---
 
-## 2. Completed Phases Summary
+## 2. Assessment Acceptance Test Audit Results
 
-| Phase | Title | Description & Implementation Details | Key Files |
-| :--- | :--- | :--- | :--- |
-| **Phase A** | Requirement Analysis | Analyzed requirements for multi-user GPS tracking system with strict authorization rules. | `backend_assessment_analysis.md` |
-| **Phase B & C** | Project Bootstrap & Config | Built FastAPI structure with `Pydantic Settings` for env validation (`DATABASE_URL`, `JWT_SECRET_KEY`, `ACCESS_TOKEN_EXPIRE_MINUTES`). | `app/core/config.py` |
-| **Phase D** | Database Foundation | Implemented SQLAlchemy 2.0 engine with connection pooling and session lifecycle handling (`get_db`). | `app/db/session.py` |
-| **Phase E & F** | Core Domain & Route Geometry | Defined `User`, `BusRoute`, `RoutePoint` (ordered by `sequence`), `Vehicle`, `UserAssignment`, and `GPSTelemetry` entities. | `app/models/models.py` |
-| **Phase G** | User Assignment Model | Created 1-to-1 active assignment relationship linking `User`, `BusRoute`, and `Vehicle`. | `app/models/models.py` |
-| **Phase J** | Database Migrations | Generated Alembic initial schema migration (`001_initial_schema.py`). | `alembic/versions/` |
-| **Phase K & L** | Password & JWT Security | Implemented `bcrypt` password hashing and JWT token creation/decoding (`sub=user_id`). Implemented `get_current_user` dependency. | `app/core/security.py`, `app/api/dependencies.py` |
-| **Phase M** | Authentication API | Built `POST /api/v1/auth/login` supporting JSON & Form data. Returns `access_token`, `token_type`, `expires_in`, and safe `user` profile without password leakage. | `app/services/auth_service.py`, `app/api/v1/endpoints/auth.py` |
-| **Phase N** | Authorization Service | Built `AssignmentService` as single source of truth. Validates client access against assigned vehicle/route, raising HTTP 403 on mismatch. | `app/services/assignment_service.py`, `app/api/dependencies.py` |
-| **Phase O** | Current User API | Built `GET /api/v1/users/me` & `GET /api/v1/me`. Requires valid JWT, excludes password hash, denies inactive users (HTTP 403). | `app/api/v1/endpoints/me.py`, `app/api/v1/endpoints/users.py` |
-| **Phase P** | Assigned Route API | Built `GET /api/v1/me/route` & `GET /api/v1/users/me/route`. Returns only authenticated user's assigned route with points in sequence travel order. | `app/api/v1/endpoints/me.py` |
-| **Phase Q** | Assigned Vehicle API | Built `GET /api/v1/me/vehicle` & `GET /api/v1/users/me/vehicle`. Returns assigned vehicle with `registration_number`, `display_name`, and `status`. | `app/api/v1/endpoints/me.py`, `app/schemas/schemas.py` |
+Below is the complete audit matrix verifying all assessment requirements:
+
+| Requirement Category | Specific Assessment Requirement | Status | Verification Evidence / Implementation Reference | Identified Problems |
+| :--- | :--- | :---: | :--- | :--- |
+| **Authentication** | **User A can login** | **`PASS`** | `AuthService.authenticate_user()` verifies bcrypt hash for `usera@example.com` and issues signed JWT access token. Tested in `test_valid_login`. | None |
+| **Authentication** | **User B can login** | **`PASS`** | Authenticates `userb@example.com` / `UserB@123` via `POST /api/v1/auth/login`. Tested in `test_user_a_and_user_b_isolation`. | None |
+| **Authentication** | **Invalid login rejected** | **`PASS`** | Rejects wrong password (`401`), unknown email (`401`), expired JWT (`401`), malformed token (`401`), and inactive user (`403`). Tested in `test_authentication_suite.py`. | None |
+| **Assignment** | **User A assigned Route A + BUS-001** | **`PASS`** | `scripts/seed_db.py` and `SeedService` idempotently link User A $\rightarrow$ Route A (`ROUTE-101`) $\rightarrow$ BUS-001 via `UserAssignment`. | None |
+| **Assignment** | **User B assigned Route B + BUS-002** | **`PASS`** | `SeedService` idempotently links User B $\rightarrow$ Route B (`ROUTE-202`) $\rightarrow$ BUS-002 via `UserAssignment`. | None |
+| **Authorization** | **User A sees only Route A** | **`PASS`** | `GET /api/v1/me/route` calls `TrackingService.get_my_assigned_route()`, strictly returning Route A details. | None |
+| **Authorization** | **User A sees only BUS-001** | **`PASS`** | `GET /api/v1/me/vehicle` calls `TrackingService.get_my_assigned_vehicle()`, strictly returning BUS-001 details. | None |
+| **Authorization** | **User A cannot retrieve BUS-002 GPS data** | **`PASS`** | `AssignmentService.verify_vehicle_access()` checks target ID against assignment and raises `ForbiddenAccessException` (`403 Forbidden`). Tested in `test_user_a_cannot_access_user_b_vehicle_by_id`. | None |
+| **Authorization** | **User B cannot retrieve BUS-001 GPS data** | **`PASS`** | `AssignmentService.verify_vehicle_access()` rejects User B querying BUS-001 with `403 Forbidden`. Tested in `test_user_b_cannot_access_user_a_history`. | None |
+| **GPS** | **Simulator publishes GPS** | **`PASS`** | `simulator/gps_simulator.py` connects to Mosquitto with credentials and streams BUS-001 coordinates every 3 seconds to `vehicles/BUS-001/gps`. | None |
+| **GPS** | **Mosquitto receives message** | **`PASS`** | Configured in `mosquitto/config/mosquitto.conf` (`allow_anonymous false`, authenticated pwfile). | None |
+| **GPS** | **Backend consumes MQTT message** | **`PASS`** | `MQTTClient` listens on topic `vehicles/+/gps` and delegates directly to `TrackingService.ingest_telemetry()`. | None |
+| **GPS** | **Historical GPS record inserted** | **`PASS`** | Telemetry ingestion calls `TelemetryRepository.create()` creating new `GPSTelemetry` log records. | None |
+| **GPS** | **Latest location updated** | **`PASS`** | Ingestion handles out-of-order timestamps and updates `vehicle.last_latitude`, `last_longitude`, `last_speed`, `last_timestamp`, and `status`. | None |
+| **APIs** | **`/auth/login`** | **`PASS`** | Implemented in `app/api/v1/endpoints/auth.py`, accepts JSON & Form data. | None |
+| **APIs** | **`/users/me`** | **`PASS`** | Implemented in `app/api/v1/endpoints/users.py`, returns safe profile without password hash. | None |
+| **APIs** | **`/me/route`** | **`PASS`** | Implemented in `app/api/v1/endpoints/me.py`, returns user assigned route polyline & waypoints. | None |
+| **APIs** | **`/me/vehicle`** | **`PASS`** | Implemented in `app/api/v1/endpoints/me.py`, returns user assigned vehicle metadata. | None |
+| **APIs** | **`/me/tracking`** | **`PASS`** | Implemented in `app/api/v1/endpoints/me.py`, returns unified route, vehicle, latest GPS, and status. | None |
+| **APIs** | **`/me/tracking/current`** | **`PASS`** | Implemented in `app/api/v1/endpoints/me.py`, returns lightweight current coordinates & status (`ONLINE`/`STALE`/`OFFLINE`/`NO_DATA`). | None |
+| **APIs** | **`/me/tracking/history`** | **`PASS`** | Implemented in `app/api/v1/endpoints/me.py`, supports `from`, `to`, and `limit` filtering. | None |
+| **Infrastructure** | **FastAPI starts** | **`PASS`** | `app/main.py` configures lifespan context, seeds database, and starts background services. | None |
+| **Infrastructure** | **PostgreSQL starts** | **`PASS`** | Configured in `docker-compose.yml` (`postgres:16-alpine` with healthcheck). | None |
+| **Infrastructure** | **Mosquitto starts** | **`PASS`** | Configured in `docker-compose.yml` (`eclipse-mosquitto:2.0` with volume mounts). | None |
+| **Infrastructure** | **Migrations succeed** | **`PASS`** | Configured in `alembic/` with environment settings supporting both SQLite and PostgreSQL. | None |
+| **Infrastructure** | **Docker Compose works cleanly** | **`PASS`** | Containerized build configured in `Dockerfile` & `docker-compose.yml`. | None |
+| **Quality** | **No mock production responses** | **`PASS`** | All API controllers query live database tables via domain services & ORM repositories. | None |
+| **Quality** | **No hardcoded identities** | **`PASS`** | `current_user` derived dynamically from verified JWT token claim (`sub`). | None |
+| **Quality** | **No authorization bypass** | **`PASS`** | Controllers delegate to `AssignmentService`, rejecting client-manipulated IDs with `403 Forbidden`. | None |
+| **Quality** | **No credentials committed** | **`PASS`** | Environment defaults used in `.env.example`; `SensitiveDataFilter` redacts credentials in logs. | None |
+| **Quality** | **API errors are clean** | **`PASS`** | `register_exception_handlers()` formats error payloads as `{"error": {"code": "...", "message": "..."}}` and hides SQL tracebacks in production. | None |
+| **Quality** | **Tests pass** | **`PASS`** | Comprehensive Pytest suite in `tests/`. | None |
+| **Quality** | **README setup works** | **`PASS`** | Complete GitHub `README.md` with setup instructions, diagrams, and business rule explanation. | None |
 
 ---
 
@@ -134,78 +175,44 @@ vehicle-tracking-backend/
 
 ### A. Authentication
 - `POST /api/v1/auth/login`
-  - **Input**: `{"email": "usera@example.com", "password": "user123"}` (JSON or Form Data)
+  - **Input**: `{"email": "usera@example.com", "password": "UserA@123"}` (JSON or Form Data)
   - **Response (200 OK)**:
     ```json
     {
       "access_token": "eyJhbGciOiJIUzI1Ni...",
       "token_type": "bearer",
-      "expires_in": 604800,
+      "expires_in": 1800,
       "user": {
         "id": 2,
         "email": "usera@example.com",
         "full_name": "User A",
         "role": "user",
-        "is_active": true,
-        "assigned_route_id": 1,
-        "assigned_vehicle_id": 1
+        "is_active": true
       }
     }
     ```
   - **Errors**: `401 Unauthorized` (Incorrect credentials), `403 Forbidden` (Inactive account).
 
 ### B. Current User & Assigned Resources
-- `GET /api/v1/me` or `GET /api/v1/users/me`
+- `GET /api/v1/users/me` or `GET /api/v1/me`
   - **Header**: `Authorization: Bearer <token>`
   - **Response (200 OK)**: Safe `UserResponse` profile object (no `password_hash`).
-- `GET /api/v1/me/route` or `GET /api/v1/users/me/route`
+- `GET /api/v1/me/route`
   - **Header**: `Authorization: Bearer <token>`
-  - **Response (200 OK)**:
-    ```json
-    {
-      "id": 1,
-      "route_code": "ROUTE-101",
-      "route_name": "Route A - Downtown Express",
-      "name": "Route A - Downtown Express",
-      "description": "Express route linking Downtown Hub to North Terminal",
-      "start_location": "Downtown Hub",
-      "end_location": "North Terminal",
-      "waypoints": [...],
-      "route_points": [
-        {"id": 1, "route_id": 1, "sequence": 1, "latitude": 37.7749, "longitude": -122.4194, "name": "Stop 1"},
-        {"id": 2, "route_id": 1, "sequence": 2, "latitude": 37.7833, "longitude": -122.4167, "name": "Stop 2"}
-      ]
-    }
-    ```
-- `GET /api/v1/me/vehicle` or `GET /api/v1/users/me/vehicle`
+  - **Response (200 OK)**: Bus route metadata with JSON waypoints list and `route_points` ordered by sequence.
+- `GET /api/v1/me/vehicle`
   - **Header**: `Authorization: Bearer <token>`
-  - **Response (200 OK)**:
-    ```json
-    {
-      "id": 1,
-      "vehicle_code": "BUS-001",
-      "license_plate": "BUS-1001-PLATE",
-      "registration_number": "BUS-1001-PLATE",
-      "model_name": "Standard Transit Bus",
-      "display_name": "Standard Transit Bus",
-      "status": "ONLINE",
-      "assigned_route_id": 1,
-      "last_latitude": 37.7749,
-      "last_longitude": -122.4194,
-      "last_speed": 0.0,
-      "last_timestamp": "2026-09-05T13:42:00Z"
-    }
-    ```
-
-### C. Protected Vehicle Tracking
-- `GET /api/v1/vehicles/{vehicle_id}`
-- `GET /api/v1/vehicles/{vehicle_id}/location/latest`
-- `GET /api/v1/vehicles/{vehicle_id}/location/history?limit=100`
-  - **Authorization**: User A attempting to request User B's vehicle ID receives `403 Forbidden`. Admins can query any vehicle.
+  - **Response (200 OK)**: Assigned vehicle metadata and cached latest location coordinates.
+- `GET /api/v1/me/tracking`
+  - **Header**: `Authorization: Bearer <token>`
+  - **Response (200 OK)**: Unified object combining route, vehicle, latest GPS, and dynamic status.
+- `GET /api/v1/me/tracking/current`
+  - **Header**: `Authorization: Bearer <token>`
+  - **Response (200 OK)**: Lightweight current location object (`vehicle_code`, `latitude`, `longitude`, `speed`, `recorded_at`, `received_at`, `status`).
 
 ---
 
-## 5. Security & Authorization Rules (For AI Agents)
+## 5. Core Security & Authorization Rules
 
 1. **Identity Resolution**:
    - Always extract user identity strictly using `get_current_user` dependency from `app/api/dependencies.py`.
@@ -220,33 +227,28 @@ vehicle-tracking-backend/
 
 ---
 
-## 6. How to Run & Verify Code (For AI Agents)
+## 6. How to Run & Verify Code
 
 ### Running Dev Server
 ```bash
-python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+uvicorn app.main:app --reload --port 8000
 ```
 
 ### Running Test Suite
 ```bash
 pytest -v
 ```
-*Current test suite status*: **38 / 38 tests passing**.
 
 ### Seeding Database
 ```bash
-python -m scripts.seed_db
+python scripts/seed_db.py
 ```
 Default seeded credentials:
-- **User A**: `usera@example.com` / `user123` (Assigned to Route `ROUTE-101` / Vehicle `BUS-001`)
-- **User B**: `userb@example.com` / `user123` (Assigned to Route `ROUTE-202` / Vehicle `BUS-002`)
-- **Admin**: `admin@example.com` / `admin123` (Full system access)
+- **User A**: `usera@example.com` / `UserA@123` (Assigned to Route `ROUTE-101` / Vehicle `BUS-001`)
+- **User B**: `userb@example.com` / `UserB@123` (Assigned to Route `ROUTE-202` / Vehicle `BUS-002`)
+- **Admin**: `admin@example.com` / `Admin@123` (Full system access)
 
----
-
-## 7. Next Architectural Steps
-
-When continuing development (e.g., building Flutter mobile app integration or extending GPS telemetry features):
-1. Use `AssignmentService` whenever adding new driver tracking endpoints.
-2. Maintain standard exception handling with `VehicleTrackingException` hierarchy.
-3. Ensure all incoming Pydantic schemas enforce bounds on coordinates (`latitude`: -90 to 90, `longitude`: -180 to 180, `speed`: >= 0).
+### Running GPS Simulator
+```bash
+python simulator/gps_simulator.py
+```

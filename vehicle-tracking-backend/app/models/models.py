@@ -66,6 +66,10 @@ class RoutePoint(Base):
 
     route: Mapped["BusRoute"] = relationship("BusRoute", back_populates="route_points")
 
+    __table_args__ = (
+        Index("idx_route_sequence", "route_id", "sequence"),
+    )
+
 class Vehicle(Base):
     __tablename__ = "vehicles"
 

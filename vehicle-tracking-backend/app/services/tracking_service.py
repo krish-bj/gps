@@ -28,6 +28,63 @@ class TrackingService:
         self.vehicle_repo = VehicleRepository(db)
         self.telemetry_repo = TelemetryRepository(db)
 
+    def _format_bus_route_response(self, route: BusRoute) -> BusRouteResponse:
+        waypoints_list = [Waypoint(**wp) for wp in parse_json_waypoints(route.waypoints_json)]
+        route_points_list = [RoutePointResponse.model_validate(rp) for rp in route.route_points] if hasattr(route, "route_points") and route.route_points else []
+        return BusRouteResponse(
+            id=route.id,
+            route_code=route.route_code,
+            route_name=route.route_name,
+            description=route.description,
+            start_location=route.start_location,
+            end_location=route.end_location,
+            waypoints=waypoints_list,
+            route_points=route_points_list,
+            created_at=route.created_at
+        )
+
+    def get_my_assigned_route(self, user: User) -> BusRouteResponse:
+        details = self.assignment_service.get_user_assigned_details(user)
+        route_db = self.route_repo.get_by_id(details["route"].id)
+        return self._format_bus_route_response(route_db)
+
+    def get_my_assigned_vehicle(self, user: User) -> VehicleResponse:
+        details = self.assignment_service.get_user_assigned_details(user)
+        return VehicleResponse.model_validate(details["vehicle"])
+
+    def get_accessible_routes(self, user: User) -> List[BusRouteResponse]:
+        if user.role == "admin":
+            routes = self.route_repo.get_all()
+        else:
+            try:
+                details = self.assignment_service.get_user_assigned_details(user)
+                route_db = self.route_repo.get_by_id(details["route"].id)
+                routes = [route_db] if route_db else []
+            except ForbiddenAccessException:
+                routes = []
+        return [self._format_bus_route_response(r) for r in routes]
+
+    def get_route_by_id(self, user: User, route_id: int) -> BusRouteResponse:
+        route = self.verify_route_access(user, route_id)
+        route_db = self.route_repo.get_by_id(route.id)
+        return self._format_bus_route_response(route_db)
+
+    def get_accessible_vehicles(self, user: User) -> List[VehicleResponse]:
+        if user.role == "admin":
+            vehicles = self.vehicle_repo.get_all()
+        else:
+            try:
+                details = self.assignment_service.get_user_assigned_details(user)
+                vehicles = [details["vehicle"]]
+            except ForbiddenAccessException:
+                vehicles = []
+        return [VehicleResponse.model_validate(v) for v in vehicles]
+
+    def get_vehicle_by_id(self, user: User, vehicle_id: int) -> VehicleResponse:
+        vehicle = self.verify_vehicle_access(user, vehicle_id)
+        return VehicleResponse.model_validate(vehicle)
+
+
     def get_my_current_location(self, user: User) -> CurrentLocationResponse:
         details = self.assignment_service.get_user_assigned_details(user)
         vehicle = details["vehicle"]
@@ -219,6 +276,10 @@ class TrackingService:
         return [GPSTelemetryResponse.model_validate(log) for log in history]
 
 
+import logging
+
+logger = logging.getLogger("tracking_service")
+
     def ingest_telemetry(
         self,
         latitude: float,
@@ -237,6 +298,7 @@ class TrackingService:
             vehicle = self.vehicle_repo.get_by_code(vehicle_code)
 
         if not vehicle:
+            logger.warning(f"GPS telemetry REJECTED (Source: {source}): Vehicle '{vehicle_code or vehicle_id}' not found.")
             raise EntityNotFoundException("Vehicle", vehicle_code or vehicle_id or "unknown")
 
         log_ts = timestamp or datetime.now(timezone.utc)
@@ -253,6 +315,8 @@ class TrackingService:
                 timestamp=log_ts,
                 source=source
             )
+            logger.info(f"GPS telemetry RECEIVED (Source: {source}, Vehicle: '{vehicle.vehicle_code}'): Lat: {latitude}, Lng: {longitude}, Speed: {speed_kmh} km/h")
+
 
             # Handle out-of-order timestamps: Only update cached latest vehicle coordinates
             # if incoming timestamp is newer than or equal to current last_timestamp.
