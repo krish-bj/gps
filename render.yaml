@@ -1,9 +1,19 @@
 # Render Infrastructure-as-Code Blueprint
-# For Python FastAPI Vehicle Tracking Backend
+# For Python FastAPI Vehicle Tracking Backend + Managed PostgreSQL DB
+
+databases:
+  # -------------------------------------------------------------
+  # Render Managed PostgreSQL Database (Free Tier)
+  # -------------------------------------------------------------
+  - name: vehicle-tracking-db
+    databaseName: vehicle_tracking
+    user: tracking_user
+    plan: free
+    region: singapore # Options: oregon, frankfurt, singapore, ohio
 
 services:
   # -------------------------------------------------------------
-  # FastAPI Backend API Service
+  # Python FastAPI Backend API Service
   # -------------------------------------------------------------
   - type: web
     name: vehicle-tracking-backend
@@ -12,12 +22,16 @@ services:
     dockerfilePath: Dockerfile
     healthCheckPath: /health
     plan: free
-    region: singapore # Options: oregon, frankfurt, singapore, ohio
+    region: singapore
     envVars:
       - key: APP_ENV
         value: production
       - key: SECRET_KEY
         generateValue: true
+      - key: DATABASE_URL
+        fromDatabase:
+          name: vehicle-tracking-db
+          property: connectionString
       - key: ALLOWED_ORIGINS
         value: "*"
       - key: ALLOWED_HOSTS

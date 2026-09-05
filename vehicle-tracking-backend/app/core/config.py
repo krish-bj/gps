@@ -47,6 +47,13 @@ class Settings(BaseSettings):
         description="Database Connection URL (PostgreSQL or SQLite)"
     )
 
+    @field_validator("DATABASE_URL", mode="before")
+    @classmethod
+    def assemble_db_connection(cls, v: str) -> str:
+        if isinstance(v, str) and v.startswith("postgres://"):
+            return v.replace("postgres://", "postgresql://", 1)
+        return v
+
     # JWT Authentication Configuration
     JWT_SECRET_KEY: str = Field(
         default="change_this_to_a_secure_32_character_random_key_for_dev",
