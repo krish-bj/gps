@@ -192,6 +192,7 @@ class CurrentLocationResponse(BaseModel):
     latitude: Optional[float] = None
     longitude: Optional[float] = None
     speed: float = 0.0
+    heading: float = 0.0
     recorded_at: Optional[datetime] = None
     received_at: Optional[datetime] = None
     status: str = "NO_DATA"

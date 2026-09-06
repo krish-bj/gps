@@ -21,6 +21,7 @@ done
 if [ "${ENABLE_SIMULATOR:-true}" = "true" ]; then
     echo "Starting background GPS Telemetry Simulator..."
     export REST_API_URL="http://127.0.0.1:${PORT:-8000}/api/v1/gps"
+    export VEHICLE_CODES="${VEHICLE_CODES:-BUS-001,BUS-002}"
     python simulator/gps_simulator.py &
 fi
 

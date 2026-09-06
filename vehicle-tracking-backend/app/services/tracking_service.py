@@ -100,6 +100,7 @@ class TrackingService:
                 latitude=latest.latitude,
                 longitude=latest.longitude,
                 speed=latest.speed,
+                heading=latest.heading or 0.0,
                 recorded_at=latest.recorded_at,
                 received_at=latest.received_at,
                 status=derived_status
@@ -112,6 +113,7 @@ class TrackingService:
                 latitude=vehicle.last_latitude,
                 longitude=vehicle.last_longitude,
                 speed=vehicle.last_speed or 0.0,
+                heading=0.0,
                 recorded_at=vehicle.last_timestamp or vehicle.created_at,
                 received_at=vehicle.last_timestamp or vehicle.created_at,
                 status=derived_status

@@ -20,7 +20,7 @@ MQTT_PORT = int(os.getenv("MQTT_PORT", 1883))
 MQTT_USERNAME = os.getenv("MQTT_USERNAME", "gps_ingest_user")
 MQTT_PASSWORD = os.getenv("MQTT_PASSWORD", "gps_secure_pass_2026")
 
-VEHICLE_CODE = os.getenv("VEHICLE_CODE", "BUS-001")
+VEHICLE_CODES_ENV = os.getenv("VEHICLE_CODES") or os.getenv("VEHICLE_CODE")
 SIMULATION_INTERVAL = float(os.getenv("SIMULATION_INTERVAL", 3.0))
 
 REST_API_URL = os.getenv("REST_API_URL", "http://localhost:8000/api/v1/gps")
@@ -3638,6 +3638,16 @@ def _calc_dist_meters(lat1: float, lng1: float, lat2: float, lng2: float) -> flo
     dy = math.radians(lat2 - lat1) * 6371000.0
     return math.hypot(dx, dy)
 
+def _calc_bearing(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
+    """Calculates compass heading angle (0-360 degrees) from point 1 to point 2."""
+    phi1 = math.radians(lat1)
+    phi2 = math.radians(lat2)
+    delta_lambda = math.radians(lng2 - lng1)
+    y = math.sin(delta_lambda) * math.cos(phi2)
+    x = math.cos(phi1) * math.sin(phi2) - math.sin(phi1) * math.cos(phi2) * math.cos(delta_lambda)
+    bearing = math.degrees(math.atan2(y, x))
+    return (bearing + 360.0) % 360.0
+
 class VehicleSimulator:
     """
     Simulates smooth, realistic vehicle movements along a predefined bus route.
@@ -3660,6 +3670,7 @@ class VehicleSimulator:
                 "latitude": 12.9716,
                 "longitude": 77.5946,
                 "speed": 0.0,
+                "heading": 0.0,
                 "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
             }
 
@@ -3669,6 +3680,9 @@ class VehicleSimulator:
         # Current interpolated coordinate
         lat = p1["lat"] + (p2["lat"] - p1["lat"]) * self.progress
         lng = p1["lng"] + (p2["lng"] - p1["lng"]) * self.progress
+
+        # Current direction bearing
+        heading = _calc_bearing(p1["lat"], p1["lng"], p2["lat"], p2["lng"])
 
         # Realistic speed fluctuation around 35-50 km/h
         speed = max(20.0, self.speed_base + (math.sin(self.step_count * 0.15) * 12.0))
@@ -3702,22 +3716,34 @@ class VehicleSimulator:
             "latitude": round(lat, 6),
             "longitude": round(lng, 6),
             "speed": round(speed, 1),
+            "heading": round(heading, 1),
             "timestamp": timestamp_iso
         }
 
 def run_simulation():
-    waypoints = ROUTES.get(VEHICLE_CODE, ROUTES["BUS-001"])
-    simulator = VehicleSimulator(VEHICLE_CODE, waypoints, speed_base=38.0)
+    # Determine vehicles to simulate
+    if VEHICLE_CODES_ENV:
+        vehicle_codes = [code.strip() for code in VEHICLE_CODES_ENV.split(",") if code.strip()]
+    else:
+        vehicle_codes = list(ROUTES.keys())
+
+    logger.info(f"Initializing GPS simulation for vehicles: {vehicle_codes}")
+
+    simulators: list[VehicleSimulator] = []
+    for code in vehicle_codes:
+        waypoints = ROUTES.get(code, ROUTES["BUS-001"])
+        sim = VehicleSimulator(code, waypoints, speed_base=38.0)
+        simulators.append(sim)
 
     # Initialize MQTT Client with authentication
     mqtt_client = None
     try:
         if hasattr(mqtt, "CallbackAPIVersion"):
-            mqtt_client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=f"gps_sim_{VEHICLE_CODE}")
+            mqtt_client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id="gps_sim_fleet")
         else:
-            mqtt_client = mqtt.Client(client_id=f"gps_sim_{VEHICLE_CODE}")
+            mqtt_client = mqtt.Client(client_id="gps_sim_fleet")
     except Exception:
-        mqtt_client = mqtt.Client(client_id=f"gps_sim_{VEHICLE_CODE}")
+        mqtt_client = mqtt.Client(client_id="gps_sim_fleet")
 
     if MQTT_USERNAME and MQTT_PASSWORD:
         mqtt_client.username_pw_set(MQTT_USERNAME, MQTT_PASSWORD)
@@ -3732,34 +3758,35 @@ def run_simulation():
     except Exception as e:
         logger.warning(f"Could not connect to MQTT Broker ({e}). Will use REST API fallback ({REST_API_URL}).")
 
-    topic = f"vehicles/{VEHICLE_CODE}/gps"
-    logger.info(f"Starting GPS simulation for '{VEHICLE_CODE}'. Target Topic: '{topic}'. Interval: {SIMULATION_INTERVAL}s")
+    logger.info(f"Starting GPS simulation for {len(simulators)} vehicle(s). Interval: {SIMULATION_INTERVAL}s")
 
     step = 0
     try:
         while True:
             step += 1
-            telemetry = simulator.get_next_telemetry()
-            payload_json = json.dumps(telemetry)
+            for sim in simulators:
+                telemetry = sim.get_next_telemetry()
+                payload_json = json.dumps(telemetry)
+                topic = f"vehicles/{sim.vehicle_code}/gps"
 
-            if mqtt_connected:
-                mqtt_client.publish(topic, payload_json)
-                logger.info(
-                    f"#{step:04d} [MQTT -> {topic}] Lat: {telemetry['latitude']}, Lng: {telemetry['longitude']}, Speed: {telemetry['speed']} km/h"
-                )
-            else:
-                # REST API fallback ingestion
-                headers = {"X-API-Key": GPS_API_KEY, "Content-Type": "application/json"}
-                try:
-                    res = requests.post(REST_API_URL, json=telemetry, headers=headers, timeout=2.5)
-                    if res.status_code == 201:
-                        logger.info(
-                            f"#{step:04d} [REST API Fallback] Lat: {telemetry['latitude']}, Lng: {telemetry['longitude']}, Speed: {telemetry['speed']} km/h"
-                        )
-                    else:
-                        logger.warning(f"#{step:04d} [REST Fallback] API status {res.status_code}: {res.text}")
-                except Exception as req_err:
-                    logger.warning(f"#{step:04d} [REST Fallback Error] {req_err}")
+                if mqtt_connected:
+                    mqtt_client.publish(topic, payload_json)
+                    logger.info(
+                        f"#{step:04d} [{sim.vehicle_code} -> MQTT] Lat: {telemetry['latitude']}, Lng: {telemetry['longitude']}, Speed: {telemetry['speed']} km/h, Heading: {telemetry['heading']}°"
+                    )
+                else:
+                    # REST API fallback ingestion
+                    headers = {"X-API-Key": GPS_API_KEY, "Content-Type": "application/json"}
+                    try:
+                        res = requests.post(REST_API_URL, json=telemetry, headers=headers, timeout=2.5)
+                        if res.status_code == 201:
+                            logger.info(
+                                f"#{step:04d} [{sim.vehicle_code} -> REST] Lat: {telemetry['latitude']}, Lng: {telemetry['longitude']}, Speed: {telemetry['speed']} km/h, Heading: {telemetry['heading']}°"
+                            )
+                        else:
+                            logger.warning(f"#{step:04d} [{sim.vehicle_code} -> REST Fallback] API status {res.status_code}: {res.text}")
+                    except Exception as req_err:
+                        logger.warning(f"#{step:04d} [{sim.vehicle_code} -> REST Fallback Error] {req_err}")
 
             time.sleep(SIMULATION_INTERVAL)
     except KeyboardInterrupt:
