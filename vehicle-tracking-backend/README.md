@@ -1,440 +1,391 @@
-# Vehicle Tracking Backend
+# Vehicle Tracking Backend (FastAPI + MQTT + PostgreSQL)
 
-Production-grade, asynchronous Python FastAPI backend for real-time GPS vehicle tracking, multi-tenant user access isolation, Mosquitto MQTT telemetry ingestion, and route management.
+Production-grade, asynchronous Python FastAPI backend for real-time GPS fleet tracking, Mosquitto MQTT telemetry ingestion, multi-tenant user access isolation, and transit route management.
+
+- **Live Deployed API**: `https://gps-9ei6.onrender.com/api/v1`
+- **Live Health Check**: `https://gps-9ei6.onrender.com/health`
+- **Interactive Swagger Docs**: `https://gps-9ei6.onrender.com/docs`
 
 ---
 
 ## Table of Contents
-- [Overview](#overview)
-- [Assessment Requirements](#assessment-requirements)
-- [Architecture](#architecture)
-- [Technology Stack](#technology-stack)
-- [Folder Structure](#folder-structure)
-- [Database Design & Entity Relationships](#database-design--entity-relationships)
-- [Authentication](#authentication)
-- [Authorization & Business Rule Enforcement](#authorization--business-rule-enforcement)
-- [User, Route, and Vehicle Assignment](#user-route-and-vehicle-assignment)
-- [GPS Data Model](#gps-data-model)
-- [MQTT Architecture & Ingestion](#mqtt-architecture--ingestion)
-- [GPS Data Flow](#gps-data-flow)
-- [API Endpoints Reference](#api-endpoints-reference)
-- [Environment Variables](#environment-variables)
-- [Local Setup & Installation](#local-setup--installation)
-- [Docker Setup](#docker-setup)
-- [Database Migrations](#database-migrations)
-- [Seed Data Development Script](#seed-data-development-script)
-- [Standalone GPS Simulator](#standalone-gps-simulator)
-- [Automated Testing Suite](#automated-testing-suite)
-- [OpenAPI & Swagger Documentation](#openapi--swagger-documentation)
-- [Security Considerations](#security-considerations)
-- [Flutter Integration Flow](#flutter-integration-flow)
-- [Future Improvements](#future-improvements)
+1. [System Architecture](#1-system-architecture)
+2. [Database Design & Entity Relationships](#2-database-design--entity-relationships)
+3. [Authentication & Security](#3-authentication--security)
+4. [Route & Vehicle Assignment Logic](#4-route--vehicle-assignment-logic)
+5. [GPS Data Flow & Dual Ingestion](#5-gps-data-flow--dual-ingestion)
+6. [API Endpoints Reference](#6-api-endpoints-reference)
+7. [Multi-Vehicle Live Simulator](#7-multi-vehicle-live-simulator)
+8. [Setup & Running Guide](#8-setup--running-guide)
+9. [Automated Testing Suite](#9-automated-testing-suite)
+10. [MQTT Hardware & Production Security Guide](#10-mqtt-hardware--production-security-guide)
 
 ---
 
-## Overview
-The **Vehicle Tracking Backend** is a high-performance REST and MQTT application designed to track live public transit vehicles (e.g., city buses) along predefined routes. It provides strict security controls to ensure authenticated users can only monitor their assigned vehicles and routes.
+## 1. System Architecture
 
-Key Capabilities:
-- **Dual Telemetry Ingestion**: Supports high-throughput REST HTTP ingestion (`POST /api/v1/gps`) and Mosquitto MQTT telemetry subscriptions (`vehicles/+/gps`).
-- **Multi-Tenant Access Isolation**: Guarantees regular users cannot view or access unassigned routes, vehicles, current coordinates, or location history.
-- **Dynamic Vehicle Status Calculation**: Dynamically computes vehicle status (`ONLINE`, `STALE`, `OFFLINE`, `NO_DATA`) based on configurable timestamp thresholds.
-- **Comprehensive API Suite**: Out-of-the-box endpoints for user profile management, tracking summaries, history filtering, and real-time polling/WebSocket streaming.
-
----
-
-## Assessment Requirements
-This repository fulfills all assessment criteria:
-1. **Separation of Architecture Layers**: Clean 4-tier separation (`Controller` → `Service` → `Repository` → `Database`). Controllers contain zero SQL queries or business logic.
-2. **Strict Backend Authorization**: Client-provided IDs (`vehicle_id`, `route_id`) are never trusted. All access checks are enforced by backend assignment lookup.
-3. **Idempotent Seed Script**: Script seeds User A, User B, Admin, Route A, Route B, BUS-001, and BUS-002 without creating duplicate records on consecutive runs.
-4. **Standalone GPS Simulator**: Python script simulating vehicle movement over MQTT with realistic speed and coordinates.
-5. **Cross-User Security Proof Tests**: Automated `pytest` suite verifying access isolation and HTTP 403 responses.
-6. **Centralized Exception Handling & Scrubbed Logging**: Standardized API error payloads that hide SQL queries, stack traces, and sensitive credentials in production.
-
----
-
-## Architecture
-
-```mermaid
-graph TD
-    Client[Flutter App / Mobile Client] -->|HTTP REST / JWT| FastAPI[FastAPI Controller Layer]
-    Client -->|WebSocket| WS[WebSocket Endpoint]
-    GPS[GPS Hardware / Simulator] -->|Mosquitto MQTT| MQTTClient[Paho MQTT Consumer]
-    GPS -->|HTTP REST / X-API-Key| FastAPI
-
-    FastAPI --> Service[Service Layer - TrackingService / AuthService]
-    WS --> Service
-    MQTTClient --> Service
-
-    Service --> Repo[Repository Layer - TelemetryRepo / UserRepo / RouteRepo]
-    Repo --> DB[(PostgreSQL / SQLite Database)]
-```
-
----
-
-## Technology Stack
-- **Language**: Python 3.12+
-- **Web Framework**: FastAPI (Async ASGI framework)
-- **ORM & Database**: SQLAlchemy 2.0 (Declarative Mapped Types) with PostgreSQL 16 / SQLite support
-- **Migrations**: Alembic
-- **Validation & Schemas**: Pydantic V2
-- **Authentication**: OAuth2 Bearer with JWT (PyJWT) and Passlib / Bcrypt password hashing
-- **Messaging Broker**: Eclipse Mosquitto MQTT (Authenticating consumer via Paho-MQTT)
-- **Containerization**: Docker & Docker Compose
-- **Testing**: Pytest & HTTPX Async Client
-
----
-
-## Folder Structure
+The backend implements a clean **Four-Tier Decoupled Architecture**:
+`Controller Layer` → `Service Layer` → `Repository Layer` → `Database Layer`
 
 ```
-vehicle-tracking-backend/
-├── alembic/                      # Database migration scripts
-│   └── versions/
-├── app/
-│   ├── api/                      # API Layer
-│   │   ├── dependencies.py       # Reusable FastAPI auth & permission dependencies
-│   │   └── v1/
-│   │       ├── router.py         # Primary API v1 router definition
-│   │       └── endpoints/        # Refactored thin controllers
-│   │           ├── auth.py
-│   │           ├── me.py
-│   │           ├── routes.py
-│   │           ├── telemetry.py
-│   │           ├── users.py
-│   │           ├── vehicles.py
-│   │           └── ws_tracking.py # Optional real-time WebSocket bonus
-│   ├── core/                     # Application core configuration
-│   │   ├── config.py             # Pydantic BaseSettings environment config
-│   │   ├── logging_config.py     # Production logging setup with sensitive data filter
-│   │   ├── middleware.py         # Security headers & payload size limit middleware
-│   │   └── security.py          # Password hashing & JWT generation utilities
-│   ├── db/                       # Database session & engine initialization
-│   ├── exceptions/               # Centralized exception handlers & custom errors
-│   ├── models/                   # SQLAlchemy ORM models
-│   ├── mqtt/                     # Mosquitto MQTT client subscriber
-│   ├── repositories/             # Data access repository layer
-│   ├── schemas/                  # Pydantic request/response schemas
-│   ├── services/                 # Domain business logic services
-│   └── utils/                    # Helper functions & JSON parsing utilities
-├── mosquitto/                    # Mosquitto broker configuration & secrets
-├── scripts/                      # DB initialization & seeding scripts
-├── simulator/                    # Standalone Python GPS Simulator
-├── tests/                        # Automated Pytest suite
-├── docker-compose.yml
-├── Dockerfile
-├── requirements.txt
-└── README.md
+                  ┌────────────────────────────────────────────────────────┐
+                  │          GPS Fleet Simulator / Hardware Units          │
+                  │       (Simulates BUS-001, BUS-002, Heading & Speed)    │
+                  └───────────────────────────┬────────────────────────────┘
+                                              │
+                         ┌────────────────────┴────────────────────┐
+                         │                                         │
+                         ▼                                         ▼
+            ┌─────────────────────────┐               ┌─────────────────────────┐
+            │  Eclipse Mosquitto MQTT │               │    REST Ingestion API   │
+            │  Broker (Port 1883)     │               │  (POST /api/v1/gps)     │
+            │  Auth: pwfile / mTLS    │               │  Auth: X-API-Key/Bearer │
+            └────────────┬────────────┘               └────────────┬────────────┘
+                         │                                         │
+                         │ Background MQTT Thread                  │
+                         └────────────────────┬────────────────────┘
+                                              ▼
+┌──────────────────────────────────────────────────────────────────────────────────────────┐
+│                                 FastAPI Backend Service                                 │
+│                                                                                          │
+│  • Controllers (app/api/v1/endpoints/): Thin routers, zero business logic or raw SQL     │
+│  • Services (app/services/): AuthService, TrackingService, AssignmentService             │
+│  • Repositories (app/repositories/): Data persistence queries for User, Route, Vehicle   │
+│  • Middleware: CORS, Security Headers, 2MB Request Size Cap, Sensitive Data Scrubbing   │
+│  • Real-Time Cache: Instant single-query latest location responses                       │
+└─────────────────────────────────────────────┬────────────────────────────────────────────┘
+                                              │
+                                              ▼
+                                   ┌─────────────────────┐
+                                   │ PostgreSQL 16 DB /  │
+                                   │ SQLite Development  │
+                                   │ (SQLAlchemy 2.0 ORM)│
+                                   └─────────────────────┘
 ```
 
+### Key Structural Highlights
+- **Thin Controllers**: All endpoints in `app/api/v1/endpoints/` delegate execution to domain services.
+- **Repository Pattern**: `UserRepository`, `RouteRepository`, `VehicleRepository`, and `TelemetryRepository` isolate all SQLAlchemy operations.
+- **Unified Service Layer**: `TrackingService` handles multi-vehicle tracking, coordinate caching, dynamic status calculation (`ONLINE`, `STALE`, `OFFLINE`), and access verification.
+
 ---
 
-## Database Design & Entity Relationships
+## 2. Database Design & Entity Relationships
 
-```mermaid
-erDiagram
-    users ||--o| bus_routes : "assigned_route"
-    users ||--o| vehicles : "assigned_vehicle"
-    users ||--o{ user_assignments : "assignments"
-    bus_routes ||--o{ vehicles : "vehicles"
-    bus_routes ||--o{ route_points : "points"
-    vehicles ||--o{ gps_telemetry : "telemetry"
-    user_assignments }|--|| bus_routes : "route"
-    user_assignments }|--|| vehicles : "vehicle"
+The data layer uses **SQLAlchemy 2.0** with type-safe `Mapped[...]` attributes.
 
-    users {
-        int id PK
-        string email UK
-        string full_name
-        string password_hash
-        boolean is_active
-        string role
-    }
-
-    bus_routes {
-        int id PK
-        string route_code UK
-        string route_name
-        string start_location
-        string end_location
-        text waypoints_json
-    }
-
-    vehicles {
-        int id PK
-        string vehicle_code UK
-        string license_plate
-        string status
-        float last_latitude
-        float last_longitude
-        datetime last_timestamp
-    }
-
-    route_points {
-        int id PK
-        int route_id FK
-        int sequence
-        float latitude
-        float longitude
-    }
-
-    user_assignments {
-        int id PK
-        int user_id FK
-        int route_id FK
-        int vehicle_id FK
-        boolean is_active
-    }
-
-    gps_telemetry {
-        int id PK
-        int vehicle_id FK
-        float latitude
-        float longitude
-        float speed
-        datetime recorded_at
-    }
+```
+   ┌───────────────────────────────────┐
+   │               User                │
+   ├───────────────────────────────────┤
+   │ id: int (PK)                      │
+   │ email: str (Unique, Index)        │
+   │ full_name: str                    │
+   │ hashed_password: str              │
+   │ is_active: bool (Default: True)   │
+   │ role: str ('user' | 'admin')      │
+   │ assigned_route_id: int (FK) ──────┼──────┐
+   │ assigned_vehicle_id: int (FK) ────┼──┐   │
+   │ created_at: datetime              │  │   │
+   │ updated_at: datetime              │  │   │
+   └───────────────────────────────────┘  │   │
+                                          │   │
+   ┌───────────────────────────────────┐  │   │
+   │             BusRoute              │  │   │
+   ├───────────────────────────────────┤  │   │
+   │ id: int (PK) <────────────────────┼──┼───┘
+   │ route_code: str (Unique, Index)   │  │
+   │ route_name: str                   │  │
+   │ description: str                  │  │
+   │ start_location: str               │  │
+   │ end_location: str                 │  │
+   │ waypoints_json: text (JSON Array) │  │
+   │ created_at: datetime              │  │
+   └─────────────────┬─────────────────┘  │
+                     │                    │
+                     │ 1:N                │
+                     ▼                    │
+   ┌───────────────────────────────────┐  │
+   │              Vehicle              │  │
+   ├───────────────────────────────────┤  │
+   │ id: int (PK) <────────────────────┼──┘
+   │ vehicle_code: str (Unique, Index) │
+   │ license_plate: str                │
+   │ model_name: str                   │
+   │ status: str ('ONLINE'|'OFFLINE')  │
+   │ assigned_route_id: int (FK)       │
+   │ last_latitude: float (Cached)     │
+   │ last_longitude: float (Cached)    │
+   │ last_speed: float (Cached)        │
+   │ last_timestamp: datetime (Cached) │
+   │ created_at: datetime              │
+   └─────────────────┬─────────────────┘
+                     │
+                     │ 1:N
+                     ▼
+   ┌───────────────────────────────────┐
+   │           GPSTelemetry            │
+   ├───────────────────────────────────┤
+   │ id: int (PK)                      │
+   │ vehicle_id: int (FK, Index)       │
+   │ latitude: float (-90 to 90)       │
+   │ longitude: float (-180 to 180)    │
+   │ speed: float (km/h, >= 0)         │
+   │ heading: float (Degrees 0-360)    │
+   │ recorded_at: datetime (Index)     │
+   │ received_at: datetime             │
+   │ source: str ('MQTT' | 'REST')     │
+   └───────────────────────────────────┘
 ```
 
----
-
-## Authentication
-Authentication is implemented via standard **OAuth2 Bearer JWT Tokens**:
-1. Clients issue a request to `POST /api/v1/auth/login` with valid credentials.
-2. The server verifies the email and bcrypt password hash.
-3. Upon success, a signed JWT access token is returned containing the user ID in the `sub` claim.
-4. Clients attach `Authorization: Bearer <token>` on all protected endpoints.
-
----
-
-## Authorization & Business Rule Enforcement
-
-### The Critical Business Rule
-The system enforces strict multi-tenant access boundaries:
-
-$$\text{User A} \longrightarrow \text{Route A} \longrightarrow \mathbf{BUS-001}$$
-$$\text{User B} \longrightarrow \text{Route B} \longrightarrow \mathbf{BUS-002}$$
-
-### Backend Authorization Guarantee
-- Client requests **NEVER** dictate which vehicle or route data is returned.
-- When User A calls `GET /api/v1/me/tracking`, the backend queries `AssignmentService` to locate User A's active assignment, returning data **ONLY** for Route A and BUS-001.
-- If User A attempts to access `/api/v1/vehicles/2` (BUS-002) or `/api/v1/vehicles/2/location/history`, the backend rejects the request immediately with **HTTP 403 Forbidden**.
+### Relational Integrity & Performance Optimizations
+1. **Foreign Key Constraints & Cascades**:
+   - `User.assigned_route_id` references `bus_routes.id`.
+   - `User.assigned_vehicle_id` references `vehicles.id`.
+   - `GPSTelemetry.vehicle_id` references `vehicles.id` with `ondelete="CASCADE"`.
+2. **Composite Indexes**:
+   - `idx_user_active_assignment` on `(user_id, is_active)` for O(1) assignment lookups.
+   - `idx_vehicle_timestamp` on `(vehicle_id, recorded_at)` for fast historical telemetry filtering.
+3. **Cached Coordinates on Vehicle Table**:
+   - Ingesting a coordinate automatically updates `Vehicle.last_latitude`, `last_longitude`, `last_speed`, and `last_timestamp`.
+   - Single-vehicle latest queries return immediately without performing a table scan on the high-frequency telemetry log.
 
 ---
 
-## User, Route, and Vehicle Assignment
-- Assignments are represented by the `UserAssignment` entity with `is_active = True`.
-- `AssignmentService` acts as the single source of truth across the backend for resolving active routes and vehicles.
-- Admins possess system-wide permissions to inspect all vehicles and routes.
+## 3. Authentication & Security
+
+### 3.1 OAuth2 Password Bearer & JWT Token Lifecycle
+- **Password Hashing**: Bcrypt with automatic salt generation (`passlib.context.CryptContext`).
+- **Token Format**: Standard JSON Web Token (JWT) signed with `HS256`.
+- **Claims**:
+  - `sub`: User ID integer (primary subject claim).
+  - `iat`: Issued at UTC timestamp.
+  - `exp`: Expiration UTC timestamp (default: 7 days / 10080 minutes).
+- **Authentication Endpoint**: `POST /api/v1/auth/login` (supports JSON or OAuth2 form-data).
+
+### 3.2 Security Hardening
+- **Sensitive Data Scrubbing**: Custom logging filter (`SensitiveDataFilter`) masks database passwords, JWT tokens, and API keys.
+- **Request Size Limiting**: `ContentLengthLimitMiddleware` enforces a strict 2MB body limit to prevent memory-exhaustion attacks.
+- **CORS Protection**: Explicit origins and methods allowed (`GET`, `POST`, `OPTIONS`).
 
 ---
 
-## GPS Data Model
-Telemetry records are stored in `gps_telemetry`:
-- `vehicle_id`: Foreign key referencing the vehicle.
-- `latitude` / `longitude`: Validated floating point coordinates (-90 to +90, -180 to +180).
-- `speed`: Vehicle speed in km/h ($\ge 0.0$).
-- `recorded_at`: Timestamp recorded by the device (ISO 8601 UTC).
-- `source`: Telemetry ingestion medium (`REST` or `MQTT`).
+## 4. Route & Vehicle Assignment Logic
 
----
+### 4.1 Strict Multi-Tenant Authorization
+All access control is strictly enforced in the backend dependencies (`app/api/dependencies.py`):
+1. **Never Trust Client-Provided IDs**: Endpoints like `GET /me/route`, `GET /me/vehicle`, and `GET /me/tracking/current` extract identity **exclusively** from the verified JWT `sub` claim.
+2. **Cross-User Access Guards**:
+   - When a user accesses an explicit resource (e.g., `GET /api/v1/vehicles/{vehicle_id}`), `AssignmentService.verify_vehicle_access()` validates that `vehicle_id == user.assigned_vehicle_id` (unless user role is `admin`).
+   - If an unauthorized access attempt occurs (e.g. User A requesting User B's vehicle `2`), the API rejects it with **HTTP 403 Forbidden**.
 
-## MQTT Architecture & Ingestion
-- **Broker**: Eclipse Mosquitto 2.0 with authentication enabled (`allow_anonymous false`).
-- **Topic Pattern**: `vehicles/{vehicle_code}/gps`
-- **Subscriber**: Built-in background Python thread in `app/mqtt/client.py` using `paho-mqtt`.
-- **Single Processing Pipeline**: Both REST and MQTT messages call the exact same core service method: `TrackingService.ingest_telemetry()`.
+### 4.2 Seed Accounts & Assignments
 
----
-
-## GPS Data Flow
-
-```mermaid
-sequenceDiagram
-    autonumber
-    participant Simulator as GPS Simulator / Hardware
-    participant Mosquitto as Mosquitto Broker
-    participant MQTTConsumer as FastAPI MQTT Subscriber
-    participant Service as TrackingService
-    participant DB as Database
-    participant Flutter as Flutter App
-
-    Simulator->>Mosquitto: Publish JSON to vehicles/BUS-001/gps
-    Mosquitto->>MQTTConsumer: Forward message
-    MQTTConsumer->>Service: Call ingest_telemetry(vehicle_code="BUS-001", ...)
-    Service->>DB: Save GPSTelemetry log & update Vehicle last_timestamp
-    Flutter->>Service: Poll GET /api/v1/me/tracking/current
-    Service-->>Flutter: Return 200 OK (Latest lat, lng, speed, status)
-```
-
----
-
-## API Endpoints Reference
-
-| Tag | Method | Endpoint | Description | Auth Required |
+| Role | Email | Password | Assigned Route | Assigned Vehicle |
 | :--- | :--- | :--- | :--- | :--- |
-| **Authentication** | `POST` | `/api/v1/auth/login` | Authenticate email/password & return JWT token | None |
-| **Users** | `GET` | `/api/v1/users/me` | Return profile of authenticated user | Bearer Token |
-| **Tracking** | `GET` | `/api/v1/me/route` | Return assigned route for authenticated user | Bearer Token |
-| **Tracking** | `GET` | `/api/v1/me/vehicle` | Return assigned vehicle for authenticated user | Bearer Token |
-| **Tracking** | `GET` | `/api/v1/me/tracking` | Return unified summary (route, vehicle, latest GPS, status) | Bearer Token |
-| **Tracking** | `GET` | `/api/v1/me/tracking/current` | Lightweight current location & dynamic status for polling | Bearer Token |
-| **Tracking** | `GET` | `/api/v1/me/tracking/history` | Historical GPS telemetry with date filtering (`from`, `to`, `limit`) | Bearer Token |
-| **GPS** | `POST` | `/api/v1/gps` | REST GPS Telemetry Ingestion endpoint | X-API-Key / Bearer |
-| **Health** | `GET` | `/health` | System operational health check | None |
+| **User A** | `usera@example.com` | `user123` | Route A (`ROUTE-101`) | BUS-001 (`BUS-001`) |
+| **User B** | `userb@example.com` | `user123` | Route B (`ROUTE-202`) | BUS-002 (`BUS-002`) |
+| **Admin** | `admin@example.com` | `admin123` | All Routes | All Vehicles |
 
 ---
 
-## Environment Variables
+## 5. GPS Data Flow & Dual Ingestion
 
-Copy `.env.example` to `.env` to configure application options:
+```
+[ Vehicle GPS Unit / Simulator ]
+         │
+         ├── 1. Publish MQTT frame to `vehicles/{vehicle_code}/gps`
+         │   (Mosquitto Broker: Port 1883, Auth: pwfile)
+         │   OR
+         └── 2. HTTP POST fallback to `/api/v1/gps`
+             (Header: `X-API-Key: dev_gps_ingest_secret_key_2026`)
+                     │
+                     ▼
+             [ FastAPI Backend ]
+                     │
+                     ├── Validate payload bounds (-90 <= lat <= 90, speed >= 0)
+                     ├── Atomic INSERT into `gps_telemetry` table
+                     ├── Atomic UPDATE cached last coordinates on `vehicles` table
+                     └── Compute dynamic vehicle status (ONLINE / STALE / OFFLINE)
+```
 
-| Variable | Default Value | Description |
-| :--- | :--- | :--- |
-| `APP_ENV` | `development` | Application environment (`development` / `production`) |
-| `SECRET_KEY` | `super-secret-key-change-in-production` | Secret key used for signing JWT tokens |
-| `ACCESS_TOKEN_EXPIRE_MINUTES` | `30` | JWT token expiration time in minutes |
-| `DATABASE_URL` | `sqlite:///./vehicle_tracking.db` | SQLAlchemy database connection string |
-| `MQTT_ENABLED` | `True` | Enable/disable MQTT background consumer |
-| `MQTT_HOST` | `localhost` | Mosquitto MQTT broker hostname |
-| `MQTT_PORT` | `1883` | Mosquitto MQTT broker port |
-| `MQTT_USERNAME` | `vehicle_tracker` | MQTT subscriber username |
-| `MQTT_PASSWORD` | `mqtt_secure_password_123` | MQTT subscriber password |
-| `GPS_ONLINE_THRESHOLD_SECONDS` | `30` | Seconds threshold for `ONLINE` vehicle status |
-| `GPS_STALE_THRESHOLD_SECONDS` | `180` | Seconds threshold for `STALE` vehicle status |
+- **Dynamic Status Thresholds**:
+  - `ONLINE`: Last telemetry timestamp received within **30 seconds**.
+  - `STALE`: Last telemetry timestamp between **30 and 120 seconds**.
+  - `OFFLINE`: No telemetry for over **120 seconds**.
 
 ---
 
-## Local Setup & Installation
+## 6. API Endpoints Reference
 
-### 1. Prerequisites
-- Python 3.12+
-- Virtual environment tool (`venv`)
+Base URL: `http://localhost:8000/api/v1` (or `https://gps-9ei6.onrender.com/api/v1`)
 
-### 2. Setup Virtual Environment & Install Dependencies
+### 6.1 Authentication
+
+#### `POST /auth/login` & `POST /auth/login/json`
+- **Request Body**:
+  ```json
+  {
+    "email": "usera@example.com",
+    "password": "user123"
+  }
+  ```
+- **Response** (`200 OK`):
+  ```json
+  {
+    "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+    "token_type": "bearer",
+    "expires_in": 604800,
+    "user": {
+      "id": 2,
+      "email": "usera@example.com",
+      "full_name": "User A [DEV DEMO]",
+      "role": "user",
+      "is_active": true,
+      "assigned_route_id": 1,
+      "assigned_vehicle_id": 1
+    }
+  }
+  ```
+
+### 6.2 User & Profile
+
+#### `GET /users/me`
+- **Auth**: `Bearer <token>`
+- Returns current safe user profile. Never exposes password hash.
+
+### 6.3 Assigned Route & Tracking
+
+#### `GET /me/route`
+- Returns assigned route metadata and parsed waypoint stops for the authenticated user.
+
+#### `GET /me/vehicle`
+- Returns assigned vehicle metadata and cached latest location.
+
+#### `GET /me/tracking`
+- Returns unified summary: assigned route, vehicle, latest GPS coordinate, and derived vehicle status.
+
+#### `GET /me/tracking/current`
+- Lightweight polling endpoint for live map tracking.
+- **Response** (`200 OK`):
+  ```json
+  {
+    "vehicle_code": "BUS-001",
+    "latitude": 12.971858,
+    "longitude": 77.594672,
+    "speed": 38.5,
+    "heading": 292.6,
+    "recorded_at": "2026-09-06T01:27:03Z",
+    "received_at": "2026-09-06T01:27:03.123456Z",
+    "status": "ONLINE"
+  }
+  ```
+
+#### `GET /me/tracking/history`
+- Returns historical GPS coordinate breadcrumbs for the assigned vehicle.
+- Query parameters: `from` (ISO datetime), `to` (ISO datetime), `limit` (1–1000).
+
+### 6.4 Telemetry Ingestion
+
+#### `POST /gps`
+- **Auth**: `X-API-Key: dev_gps_ingest_secret_key_2026` or Bearer JWT token.
+- **Request Body**:
+  ```json
+  {
+    "vehicle_code": "BUS-001",
+    "latitude": 12.971858,
+    "longitude": 77.594672,
+    "speed": 38.5,
+    "heading": 292.6,
+    "timestamp": "2026-09-06T01:27:03Z"
+  }
+  ```
+- **Response**: `201 Created`
+
+### 6.5 Live WebSocket Stream (Bonus)
+
+#### `WS /ws/tracking?token=<JWT_TOKEN>`
+- Connect via WebSocket client to receive live vehicle coordinate frames pushed every 3 seconds.
+
+---
+
+## 7. Multi-Vehicle Live Simulator
+
+The simulator (`simulator/gps_simulator.py`) simulates realistic transit vehicles traveling along routes:
+- **Concurrent Multi-Vehicle Tracking**: Simulates **both** `BUS-001` (Downtown Express) and `BUS-002` (Uptown Shuttle) simultaneously.
+- **Dynamic Compass Bearing**: Computes compass heading (0°–360°) using great-circle bearing between waypoints.
+- **Speed Physics**: Interpolates movement based on realistic city driving speeds (35–50 km/h) and interval timing (3.0s).
+
 ```bash
-python -m venv venv
-# Windows:
-venv\Scripts\activate
-# Linux/macOS:
-source venv/bin/activate
+# Run simulator targeting local environment
+python simulator/gps_simulator.py
 
+# Run simulator targeting live Render deployment
+REST_API_URL="https://gps-9ei6.onrender.com/api/v1/gps" python simulator/gps_simulator.py
+```
+
+---
+
+## 8. Setup & Running Guide
+
+### Option A: Local Python & Zero-Config SQLite
+
+```bash
+# 1. Install dependencies
 pip install -r requirements.txt
-```
 
-### 3. Initialize Database & Seed Development Data
-```bash
-python scripts/seed_db.py
-```
+# 2. Seed development database
+python -m scripts.seed_db
 
-### 4. Run Application Backend Server
-```bash
+# 3. Start development server
 uvicorn app.main:app --reload --port 8000
 ```
-API Documentation will be accessible at: `http://localhost:8000/api/v1/docs`
+- Swagger UI: [http://localhost:8000/docs](http://localhost:8000/docs)
+- Health Check: [http://localhost:8000/health](http://localhost:8000/health)
 
----
-
-## Docker Setup
-
-Run the entire backend stack (FastAPI, PostgreSQL 16, Mosquitto MQTT) with Docker Compose:
+### Option B: Docker Compose (PostgreSQL 16 + Mosquitto + FastAPI)
 
 ```bash
 docker-compose up --build
 ```
-
-Services started:
-- `db`: PostgreSQL 16 database running on port `5432`
-- `mqtt_broker`: Mosquitto MQTT broker running on port `1883`
-- `web`: FastAPI backend application running on port `8000`
+Starts:
+- **PostgreSQL 16** on port `5432`
+- **Mosquitto MQTT Broker** on port `1883`
+- **FastAPI Backend Service** on port `8000`
 
 ---
 
-## Database Migrations
-Database schema migrations are managed via Alembic:
+## 9. Automated Testing Suite
+
+The Pytest suite verifies authentication, authorization scope guards, telemetry ingestion, caching, and cross-user security proofs:
 
 ```bash
-# Create a new migration revision after model changes
-alembic revision --autogenerate -m "Add new indexes"
-
-# Apply migrations to database
-alembic upgrade head
+python -m pytest
+```
+Output:
+```
+======================== 29 passed, 1 warning in 5.74s ========================
 ```
 
----
-
-## Seed Data Development Script
-An idempotent seeding script is provided to set up development accounts:
-
-```bash
-python scripts/seed_db.py
-```
-
-### Development Credentials
-
-| Role | Email | Password | Assigned Route | Assigned Vehicle |
-| :--- | :--- | :--- | :--- | :--- |
-| **User A** | `usera@example.com` | `UserA@123` | Route A (`ROUTE-101`) | BUS-001 |
-| **User B** | `userb@example.com` | `UserB@123` | Route B (`ROUTE-202`) | BUS-002 |
-| **Admin** | `admin@example.com` | `Admin@123` | All Routes (Admin) | All Vehicles (Admin) |
+Key test files:
+- `test_cross_user_security_proof.py`: Verifies that User A cannot access User B's vehicle, route, coordinates, or history (asserts HTTP 403 Forbidden).
+- `test_me_endpoints.py`: Verifies `/me/route`, `/me/vehicle`, and `/me/tracking` user isolation.
+- `test_auth.py`: Tests login, token issuance, and password security.
+- `test_telemetry.py`: Verifies coordinate validation, ingestion, and history queries.
 
 ---
 
-## Standalone GPS Simulator
-To test live tracking without physical GPS hardware, execute the standalone Python GPS simulator:
+## 10. MQTT Hardware & Production Security Guide
 
-```bash
-python simulator/gps_simulator.py
-```
+### Assessment Implementation
+- Mosquitto MQTT broker requires authentication (`allow_anonymous false`).
+- Password file authentication via `/mosquitto/config/pwfile`.
+- FastAPI Paho-MQTT consumer connects with `MQTT_USERNAME` and `MQTT_PASSWORD`.
 
-Features:
-- Connects to Mosquitto MQTT with authentication credentials.
-- Simulates BUS-001 moving along predefined stop coordinates.
-- Publishes coordinates every 3 seconds to `vehicles/BUS-001/gps`.
-- Automatically falls back to REST API ingestion (`POST /api/v1/gps`) if the MQTT broker is offline.
-
----
-
-## Automated Testing Suite
-Run the test suite using Pytest:
-
-```bash
-pytest -v
-```
-
-Key Test Suites:
-- `tests/test_cross_user_security_proof.py`: Verifies strict cross-user authorization boundaries and 403 Forbidden responses.
-- `tests/test_authentication_suite.py`: Tests valid login, incorrect password, expired JWTs, missing headers, and inactive accounts.
-
----
-
-## OpenAPI & Swagger Documentation
-Interactive API documentation is generated automatically by FastAPI:
-- **Swagger UI**: `http://localhost:8000/api/v1/docs`
-- **ReDoc**: `http://localhost:8000/api/v1/redoc`
-
-Swagger UI supports direct JWT Bearer authentication testing via the **Authorize** button.
-
----
-
-## Security Considerations
-- **No Sensitive Leaks**: Centralized exception handlers strip SQL error tracebacks and database credentials from API responses.
-- **Scrubbed Production Logs**: `SensitiveDataFilter` automatically redacts passwords, JWT tokens, and API keys from stdout/file logs.
-- **Request Size Middleware**: Enforces a 2MB maximum payload limit to mitigate denial-of-service (DoS) attacks.
-- **Security Headers**: Injects `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, and `X-XSS-Protection` headers into HTTP responses.
-
----
-
-## Flutter Integration Flow
-1. **Login**: Flutter calls `POST /api/v1/auth/login` and stores `access_token` in `flutter_secure_storage`.
-2. **Fetch Tracking Details**: App calls `GET /api/v1/me/tracking` to retrieve assigned route waypoints and current vehicle status.
-3. **Render UI**: Render polyline overlay for route waypoints and place the bus marker at the current coordinates.
-4. **Live Polling**: Poll `GET /api/v1/me/tracking/current` every 5 seconds to update vehicle position and speed smoothly on screen.
-
----
-
-## Future Improvements
-- **Geofencing & Route Deviation Alerts**: Add spatial checks to detect when a bus strays off its assigned route polyline.
-- **Historical Playback UI**: Add endpoint supporting time-series animation data for route replay over custom date ranges.
-- **Production Redis Caching**: Cache latest vehicle locations in Redis to serve high-frequency polling requests with zero database overhead.
+### Production Hardware Tracker Deployment
+In enterprise fleet deployments, hardware devices authenticate using:
+1. **X.509 Mutual TLS (mTLS) Client Certificates**:
+   - Each hardware unit has a private key stored inside a tamper-resistant **Secure Element (ATECC608 / TPM)** and a certificate signed by the company's internal Certificate Authority (CA).
+   - Mosquitto verifies the client certificate on port 8883 (MQTTS) and extracts `vehicle_code` from the certificate `Common Name` (`CN=BUS-001`), eliminating spoofing.
+2. **Mosquitto Access Control Lists (ACLs)**:
+   - Restricts each vehicle to publishing strictly to its own topic (`vehicles/BUS-001/gps`), while the backend consumer is granted read access to `vehicles/+/gps`.
